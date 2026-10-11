@@ -11,7 +11,13 @@ typedef ExtendedConfig =
 {
 	?modRoot:String,
 	?modList:ModList,
+	?settings:ModSettings,
+	?modListFile:String,
+	?settingsFile:String,
+	?autoSave:Bool,
 	?enableNewMods:Bool,
+	?archives:Bool,
+	?gameVersion:String,
 	?framework:Framework,
 	?frameworkParams:FrameworkParams,
 	?customBackend:Class<IBackend>,

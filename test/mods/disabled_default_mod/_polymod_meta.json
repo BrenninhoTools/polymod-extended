@@ -1,0 +1,10 @@
+{
+  "id": "disabled_default_mod",
+  "title": "Disabled By Default Mod",
+  "description": "Sample mod used by the test suite",
+  "author": "BrenninhoTools",
+  "api_version": "0.1.0",
+  "mod_version": "1.0.0",
+  "license": "MIT",
+  "enabledByDefault": false
+}

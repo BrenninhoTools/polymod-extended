@@ -1,0 +1,12 @@
+{
+  "id": "zz_conflict_mod",
+  "title": "Conflict Mod",
+  "description": "Sample mod used by the test suite",
+  "author": "BrenninhoTools",
+  "api_version": "0.1.0",
+  "mod_version": "1.0.0",
+  "license": "MIT",
+  "incompatible": {
+    "base_mod": ">=1.0.0"
+  }
+}

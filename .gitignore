@@ -8,3 +8,5 @@ bin/
 .vscode/
 .DS_Store
 Thumbs.db
+test/out/
+__pycache__/

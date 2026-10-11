@@ -2,11 +2,22 @@
   "name": "polymod-extended",
   "url": "https://github.com/BrenninhoTools/polymod-extended",
   "license": "MIT",
-  "tags": ["mod", "modding", "polymod", "game", "cross", "mobile"],
+  "tags": [
+    "mod",
+    "modding",
+    "polymod",
+    "game",
+    "cross",
+    "mobile",
+    "zip",
+    "rar"
+  ],
   "description": "An expanded modding framework built on top of Polymod",
-  "version": "0.1.0",
-  "releasenote": "Initial base: mod list management, scanning, reloading, error log and signals",
-  "contributors": ["Brenninho123"],
+  "version": "0.2.0",
+  "releasenote": "Zip and RAR (store) archive mods, extended JSON mod options, mod settings and autosave",
+  "contributors": [
+    "Brenninho123"
+  ],
   "classPath": "src",
   "dependencies": {
     "polymod": ""

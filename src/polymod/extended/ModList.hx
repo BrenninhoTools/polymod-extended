@@ -93,12 +93,13 @@ class ModList
 		return true;
 	}
 
-	public function sync(availableIds:Array<String>, enableNew:Bool = true):Void
+	public function sync(availableIds:Array<String>, enableNew:Bool = true, ?isEnabledByDefault:String->Bool):Void
 	{
 		entries = entries.filter(entry -> availableIds.contains(entry.id));
 
 		for (id in availableIds)
-			add(id, enableNew);
+			if (!has(id))
+				add(id, enableNew && (isEnabledByDefault == null || isEnabledByDefault(id)));
 	}
 
 	public function getEnabledIds():Array<String>

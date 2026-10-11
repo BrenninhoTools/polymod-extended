@@ -1,0 +1,10 @@
+{
+  "id": "future_mod",
+  "title": "Future Mod",
+  "description": "Sample mod used by the test suite",
+  "author": "BrenninhoTools",
+  "api_version": "0.1.0",
+  "mod_version": "1.0.0",
+  "license": "MIT",
+  "gameVersion": ">=2.0.0"
+}
