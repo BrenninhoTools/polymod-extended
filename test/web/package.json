@@ -1,0 +1,11 @@
+{
+  "name": "polymod-extended-web-tests",
+  "private": true,
+  "description": "Runs the polymod-extended web API tests in Node.js",
+  "scripts": {
+    "test": "cd .. && node -r ./web/setup.js web/bin/test.js"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0"
+  }
+}

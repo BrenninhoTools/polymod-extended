@@ -1,0 +1,7 @@
+{
+  "mods": [
+    "../mods/rar5_mod.rar",
+    { "url": "../mods/rar4_mod.rar", "name": "renamed_rar4" },
+    "../mods/missing_mod.zip"
+  ]
+}

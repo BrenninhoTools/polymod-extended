@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  native:
+    name: Native (interp)
     runs-on: ubuntu-latest
 
     steps:
@@ -33,3 +34,47 @@ jobs:
       - name: Run tests
         working-directory: test
         run: haxe test.hxml
+
+  web:
+    name: Web (Node.js)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Haxe
+        uses: krdlab/setup-haxe@v1
+        with:
+          haxe-version: 4.3.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          haxelib setup ~/haxelib
+          haxelib install lime --quiet
+          haxelib install thx.core --quiet
+          haxelib install thx.semver --quiet
+          haxelib git jsonpath https://github.com/EliteMasterEric/jsonpath --quiet
+          haxelib git jsonpatch https://github.com/EliteMasterEric/jsonpatch --quiet
+          haxelib git polymod https://github.com/larsiusprime/polymod --quiet
+          haxelib dev polymod-extended .
+
+      - name: Work around Polymod HTML5 macro issue
+        run: grep -rl "#if html5$" "$(haxelib libpath polymod)polymod" | xargs -r sed -i 's/#if html5$/#if (html5 \&\& !macro)/'
+
+      - name: Install Node.js packages
+        working-directory: test/web
+        run: npm install
+
+      - name: Build web tests
+        working-directory: test/web
+        run: haxe web.hxml
+
+      - name: Run web tests
+        working-directory: test/web
+        run: npm test

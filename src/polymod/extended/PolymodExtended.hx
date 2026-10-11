@@ -19,7 +19,7 @@ typedef ModSettingChange =
 
 class PolymodExtended
 {
-	public static inline final VERSION:String = "0.2.0";
+	public static inline final VERSION:String = "0.3.0";
 
 	public static inline final DEFAULT_MOD_ROOT:String = "./mods";
 
@@ -304,9 +304,11 @@ class PolymodExtended
 		#if sys
 		if (config.archives != false)
 			return new polymod.extended.fs.ArchiveFileSystem({modRoot: config.modRoot});
-		#end
 
 		return PolymodFileSystem.makeFileSystem(null, {modRoot: config.modRoot});
+		#else
+		return new polymod.extended.fs.VirtualFileSystem({modRoot: config.modRoot});
+		#end
 	}
 
 	static function buildParams(modIds:Array<String>):PolymodParams
@@ -358,18 +360,7 @@ class PolymodExtended
 
 	static function readFile(path:String):Null<String>
 	{
-		#if sys
-		if (path != null && sys.FileSystem.exists(path) && !sys.FileSystem.isDirectory(path))
-		{
-			try
-			{
-				return sys.io.File.getContent(path);
-			}
-			catch (e:Dynamic) {}
-		}
-		#end
-
-		return null;
+		return polymod.extended.util.Storage.read(path);
 	}
 
 	static function writeFile(path:String, content:String):Bool
@@ -377,23 +368,10 @@ class PolymodExtended
 		if (path == null)
 			return false;
 
-		#if sys
-		try
-		{
-			var directory = haxe.io.Path.directory(path);
-
-			if (directory.length > 0 && !sys.FileSystem.exists(directory))
-				sys.FileSystem.createDirectory(directory);
-
-			sys.io.File.saveContent(path, content);
+		if (polymod.extended.util.Storage.write(path, content))
 			return true;
-		}
-		catch (e:Dynamic)
-		{
-			Polymod.error(SAVE_FAILED, 'Could not save "$path": ${Std.string(e)}');
-		}
-		#end
 
+		Polymod.error(SAVE_FAILED, 'Could not save "$path"');
 		return false;
 	}
 

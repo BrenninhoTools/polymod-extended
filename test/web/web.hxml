@@ -1,0 +1,9 @@
+-cp src
+-cp ../src
+-cp ../../src
+-lib lime
+-lib polymod
+-D html5
+-D POLYMOD_EXTENDED
+-main WebMain
+-js bin/test.js

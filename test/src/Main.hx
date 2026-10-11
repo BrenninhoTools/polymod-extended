@@ -13,6 +13,7 @@ import polymod.extended.archive.Archive;
 import polymod.extended.archive.ArchiveFormats;
 import polymod.extended.archive.ZipArchive;
 import polymod.extended.fs.ArchiveFileSystem;
+import polymod.extended.desktop.DesktopMods;
 import polymod.extended.util.Platform;
 import polymod.extended.util.Signal;
 
@@ -41,6 +42,8 @@ class Main
 		testResolver();
 		section("PolymodExtended");
 		testPolymodExtended();
+		section("DesktopMods");
+		testDesktopMods();
 
 		Sys.println('\nPassed: $passed, Failed: $failed');
 		Sys.exit(failed > 0 ? 1 : 0);
@@ -290,6 +293,83 @@ class Main
 			Sys.println('  ${error.code}: ${error.message}');
 	}
 
+	static function testDesktopMods():Void
+	{
+		var root = '$OUT/desktop_mods';
+		sys.FileSystem.createDirectory(root);
+		sys.FileSystem.createDirectory('$root/base_mod');
+		sys.io.File.copy("mods/base_mod/_polymod_meta.json", '$root/base_mod/_polymod_meta.json');
+
+		PolymodExtended.init({
+			modRoot: root,
+			framework: Framework.CUSTOM,
+			customBackend: TestBackend,
+			modListFile: '$root/modlist.json'
+		});
+		check("starts with the copied mod", PolymodExtended.getLoadedModIds().join(",") == "base_mod");
+
+		var opened:Array<String> = [];
+		DesktopMods.opener = path -> {
+			opened.push(path);
+			return true;
+		};
+		check("opens the mods folder", DesktopMods.openModsFolder() && StringTools.endsWith(opened[0], "desktop_mods"));
+		check("opens a mod folder", DesktopMods.openModFolder("base_mod") && StringTools.endsWith(opened[1], "base_mod"));
+
+		var created = DesktopMods.createMod("created_mod", {title: "Created", folders: ["data"], extra: {priority: 3}});
+		check("creates mod templates", created.success && sys.FileSystem.isDirectory('$root/created_mod/data') && PolymodExtended.isModLoaded("created_mod"));
+		check("writes extra metadata", PolymodExtended.getModOptions("created_mod").priority == 3);
+		check("rejects invalid ids", !DesktopMods.createMod("bad id!").success);
+		check("rejects duplicate mods", !DesktopMods.createMod("created_mod").success);
+
+		sys.io.File.saveContent('$root/created_mod/data/info.json', '{"name": "created"}');
+		var exported = DesktopMods.exportMod("created_mod", '$OUT/export/created_mod.zip');
+		var zip = exported.success ? ArchiveFormats.openFile('$OUT/export/created_mod.zip') : null;
+		check("exports folder mods as zip", zip != null && text(zip.read("data/info.json")).indexOf("created") != -1 && zip.has("_polymod_meta.json"));
+
+		var duplicate = DesktopMods.installMod('$OUT/export/created_mod.zip');
+		check("refuses to overwrite installed mods", !duplicate.success && duplicate.error.indexOf("already installed") != -1);
+
+		var replaced = DesktopMods.installMod('$OUT/export/created_mod.zip', {replace: true});
+		check("replaces mods when asked", replaced.success && DesktopMods.isArchiveMod("created_mod") && !sys.FileSystem.exists('$root/created_mod'));
+		check("replaced mods load from the archive", PolymodExtended.isModLoaded("created_mod"));
+
+		var rar = DesktopMods.installMod("mods/rar5_mod.rar");
+		check("installs rar mods", rar.success && sys.FileSystem.exists('$root/rar5_mod.rar') && PolymodExtended.isModLoaded("rar5_mod"));
+
+		var folder = DesktopMods.installMod("mods/addon_mod", {enable: false});
+		check("installs folder mods", folder.success && sys.FileSystem.exists('$root/addon_mod/data/info.json'));
+		check("respects the enable option", !PolymodExtended.isModLoaded("addon_mod") && !PolymodExtended.modList.isEnabled("addon_mod"));
+
+		var compressed = DesktopMods.installMod("mods/compressed_mod.rar");
+		check("explains why archives cannot be installed", !compressed.success && compressed.error.indexOf("Store") != -1);
+		check("rejects files that are not mods", !DesktopMods.installMod("mods/base_mod/_polymod_meta.json").success);
+
+		var removed:Array<String> = [];
+		DesktopMods.onUninstalled.add(id -> removed.push(id));
+		check("uninstalls archive mods", DesktopMods.uninstallMod("rar5_mod") && !sys.FileSystem.exists('$root/rar5_mod.rar'));
+		check("uninstalls folder mods", DesktopMods.uninstallMod("addon_mod") && !sys.FileSystem.exists('$root/addon_mod'));
+		check("unloads uninstalled mods", !PolymodExtended.isModLoaded("rar5_mod") && removed.join(",") == "rar5_mod,addon_mod");
+		check("fails to uninstall missing mods", !DesktopMods.uninstallMod("nothing_here"));
+
+		var changes:Array<String> = [];
+		DesktopMods.onModsChanged.add(changed -> changes = changed);
+		DesktopMods.startWatching(1.0);
+		check("watcher waits for the interval", !DesktopMods.update(0.5));
+		check("watcher ignores unchanged folders", !DesktopMods.update(0.6));
+
+		sys.FileSystem.createDirectory('$root/watched_mod');
+		sys.io.File.saveContent('$root/watched_mod/_polymod_meta.json',
+			'{"id": "watched_mod", "title": "Watched", "api_version": "0.1.0", "mod_version": "1.0.0"}');
+		check("watcher detects new mods", DesktopMods.update(1.0) && changes.contains("watched_mod/_polymod_meta.json"));
+		check("watcher reloads automatically", PolymodExtended.isModLoaded("watched_mod"));
+
+		PolymodExtended.setModEnabled("watched_mod", false);
+		check("watcher ignores the saved mod list", !DesktopMods.update(1.0));
+		DesktopMods.stopWatching();
+		check("stops watching", DesktopMods.watcher == null && !DesktopMods.update(5));
+	}
+
 	static function hasLogged(code:String):Bool
 	{
 		for (entry in PolymodExtended.log.entries)
@@ -322,8 +402,20 @@ class Main
 		if (!sys.FileSystem.exists(OUT))
 			return;
 
-		for (file in sys.FileSystem.readDirectory(OUT))
-			sys.FileSystem.deleteFile('$OUT/$file');
+		deleteRecursive(OUT);
+	}
+
+	static function deleteRecursive(path:String):Void
+	{
+		if (sys.FileSystem.isDirectory(path))
+		{
+			for (name in sys.FileSystem.readDirectory(path))
+				deleteRecursive('$path/$name');
+
+			sys.FileSystem.deleteDirectory(path);
+		}
+		else
+			sys.FileSystem.deleteFile(path);
 	}
 
 	static function section(name:String):Void

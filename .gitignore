@@ -10,3 +10,5 @@ bin/
 Thumbs.db
 test/out/
 __pycache__/
+test/web/node_modules/
+test/web/bin/

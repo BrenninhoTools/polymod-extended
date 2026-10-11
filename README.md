@@ -8,6 +8,8 @@ polymod-extended keeps Polymod as the engine underneath and adds a management la
 - An ordered mod list you can save and restore, with enabling, disabling and reordering at runtime
 - Extra mod options in `_polymod_meta.json`: priority, load order rules, incompatibilities, platform and game version filters, tags, custom data and user settings
 - Automatic saving of the mod list and mod settings
+- A web API for HTML5 builds: mods from URLs, uploads, drag and drop, and mods kept in the browser
+- A desktop API: install, uninstall, export and create mods, open the mods folder and reload when files change
 - One-call reloading, a central error log and signals your game can listen to
 
 ## Installation
@@ -87,6 +89,79 @@ PolymodExtended.reload();
 
 Set `archives: false` in the config to turn archive loading off. New archive formats can be added with `ArchiveFormats.register`.
 
+## Web (HTML5)
+
+Browsers have no mods folder, so on HTML5 `PolymodExtended.init` uses a `VirtualFileSystem` that keeps mods in memory. `WebMods` fills it:
+
+```haxe
+import polymod.Polymod.Framework;
+import polymod.extended.PolymodExtended;
+import polymod.extended.web.WebMods;
+
+PolymodExtended.init({framework: Framework.OPENFL, modListFile: "modlist.json", settingsFile: "settings.json"});
+
+WebMods.restoreInstalled().then(_ -> WebMods.loadIndex("mods/index.json"));
+```
+
+| Function | Description |
+| --- | --- |
+| `loadUrl(url, ?dirName, install)` | Downloads a `.zip` or `.rar` and loads it. With `install: true` it is also kept in the browser. |
+| `loadIndex(url, install)` | Loads every mod listed in a JSON index, see below |
+| `openFilePicker(multiple)` | Opens the browser file picker and installs the chosen archives. Call it from a click or key press. |
+| `enableDropZone(?element)` | Installs archives dropped on the page (or on `element`). Returns a function that turns it off. |
+| `installBytes(bytes, name)` / `installBlob(file)` | Installs an archive you already have |
+| `restoreInstalled()` | Loads every mod the player installed before. Call it once at startup. |
+| `uninstall(dirName)` / `clearInstalled()` / `listInstalled()` | Manages installed mods |
+| `onInstalled` / `onUninstalled` / `onLoadFailed` | Signals |
+
+Installed mods are stored in IndexedDB, so they survive page reloads. The mod list and settings go to `localStorage` under the names given in `modListFile` and `settingsFile`. All functions return promises and reload the mods when they finish (set `WebMods.autoReload = false` to reload yourself).
+
+A mod index is a JSON file with URLs relative to the index itself:
+
+```json
+{
+  "mods": [
+    "cool_mod.zip",
+    { "url": "packs/song_pack.rar", "name": "song_pack" }
+  ]
+}
+```
+
+Mods that are not archives can be added from code with `VirtualFileSystem.addFolderMod(dirName, files)`.
+
+Note: in our tests, the current Polymod git version fails to compile for HTML5 because some `#if html5` blocks in its HScript interpreter are also compiled inside macros. If you hit `Type not found : HxOverrides`, change those lines to `#if (html5 && !macro)`, as the web job in `.github/workflows/test.yml` does.
+
+## Desktop
+
+`DesktopMods` adds mod management for games with a real mods folder. Everything except opening folders and drag and drop also works on Android and iOS.
+
+```haxe
+import polymod.extended.desktop.DesktopMods;
+
+DesktopMods.enableDropInstall();
+DesktopMods.startWatching(2.0);
+
+override function update(elapsed:Float)
+{
+	super.update(elapsed);
+	DesktopMods.update(elapsed);
+}
+```
+
+| Function | Description |
+| --- | --- |
+| `installMod(path, ?options)` | Copies a `.zip`, `.rar` or mod folder into the mods folder and reloads. Options: `replace`, `reload`, `enable`. Returns `{success, id, path, error}`. |
+| `uninstallMod(id)` | Deletes the mod's folder or archive and reloads |
+| `exportMod(id, destination)` | Packs a folder mod into a `.zip` (archive mods are copied as they are) |
+| `createMod(id, ?options)` | Creates a mod folder with `_polymod_meta.json` and empty `data`, `images` and `sounds` folders. Options: `title`, `description`, `author`, `apiVersion`, `modVersion`, `folders`, `extra`. |
+| `openModsFolder()` / `openModFolder(id)` | Opens the folder in Explorer, Finder or the Linux file manager |
+| `getModLocation(id)` / `isArchiveMod(id)` | Where a mod lives on disk |
+| `startWatching(interval)` / `update(elapsed)` / `stopWatching()` | Checks the mods folder for changes and reloads automatically. Call `update` every frame. |
+| `enableDropInstall(?options)` | Installs files dropped on the game window (Lime desktop builds) |
+| `onInstalled` / `onUninstalled` / `onModsChanged` | Signals |
+
+Installing checks the archive before copying it: unreadable RARs, archives without `_polymod_meta.json` and mods whose id is already installed are refused with a clear `error` message. The watcher ignores the saved mod list and settings files, so saving does not trigger a reload.
+
 ## Mod options
 
 polymod-extended reads extra fields from each mod's `_polymod_meta.json`. Every field is optional.
@@ -164,7 +239,7 @@ PolymodExtended.onSettingChanged.add(change -> applySetting(change.modId, change
 | `save()` / `saveModList()` / `saveSettings()` | Manual saving |
 | `unloadAll()` | Unloads every mod |
 | `availableMods` / `loadedMods` / `skippedMods` | Current state |
-| `fileSystem` | The file system in use (`ArchiveFileSystem` on native targets) |
+| `fileSystem` | The file system in use (`ArchiveFileSystem` on native targets, `VirtualFileSystem` on the web) |
 | `onModsScanned` / `onModsLoaded` / `onModListChanged` / `onSettingChanged` / `onError` | Signals |
 | `log` | `ErrorLog` with every error, warning and info message |
 
@@ -177,7 +252,7 @@ Accepts the usual Polymod options (`framework`, `frameworkParams`, `customBacken
 | `modRoot` | `"./mods"` | Folder that contains the mods |
 | `modList` | loaded from `modListFile` | Saved order and enabled state |
 | `settings` | loaded from `settingsFile` | Saved mod settings |
-| `modListFile` / `settingsFile` | none | JSON files used for loading and saving |
+| `modListFile` / `settingsFile` | none | JSON files used for loading and saving (`localStorage` keys on the web) |
 | `autoSave` | `true` | Save automatically after every change |
 | `enableNewMods` | `true` | Whether mods found for the first time start enabled |
 | `archives` | `true` | Load `.zip` and `.rar` mods |
@@ -190,6 +265,11 @@ Accepts the usual Polymod options (`framework`, `frameworkParams`, `customBacken
 ```bash
 cd test
 haxe test.hxml
+
+cd web
+npm install
+haxe web.hxml
+npm test
 ```
 
 The archive fixtures in `test/mods` are generated by `test/fixtures/make_archives.py`.

@@ -10,11 +10,13 @@
     "cross",
     "mobile",
     "zip",
-    "rar"
+    "rar",
+    "web",
+    "desktop"
   ],
   "description": "An expanded modding framework built on top of Polymod",
-  "version": "0.2.0",
-  "releasenote": "Zip and RAR (store) archive mods, extended JSON mod options, mod settings and autosave",
+  "version": "0.3.0",
+  "releasenote": "Web modding API (URLs, uploads, IndexedDB) and desktop modding API (install, export, watcher)",
   "contributors": [
     "Brenninho123"
   ],
