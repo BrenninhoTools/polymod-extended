@@ -7,6 +7,9 @@ import polymod.extended.PolymodExtended;
 import polymod.extended.fs.VirtualFileSystem;
 import polymod.extended.util.Storage;
 import polymod.extended.web.IndexedDBStore;
+import polymod.extended.sources.GameBananaSource;
+import polymod.extended.web.WebDownload;
+import polymod.extended.web.WebDownload.DownloadProgress;
 import polymod.extended.web.WebMods;
 
 class WebMain
@@ -23,7 +26,7 @@ class WebMain
 		{
 			base = 'http://127.0.0.1:$port';
 			return run();
-		}).then(_ -> finish(), error ->
+		}).then(_ -> runDownloads()).then(_ -> runSources()).then(_ -> runBackups()).then(_ -> finish(), error ->
 		{
 			print('Unexpected error: $error');
 			failed++;
@@ -150,22 +153,130 @@ class WebMain
 		});
 	}
 
+	static function runDownloads():Promise<Dynamic>
+	{
+		print("\nDownloads");
+		var events:Array<DownloadProgress> = [];
+
+		return WebMods.loadUrl('$base/mods/rar4_mod.rar?progress', "progress_rar4", false, {onProgress: progress -> events.push(progress)}).then(dirName ->
+		{
+			check("reports download progress", events.length > 0 && events[events.length - 1].ratio == 1);
+			var before:Int = serverState().notModified;
+			return WebMods.loadUrl('$base/mods/rar5_mod.rar').then(_ -> (serverState().notModified : Int) > before);
+		}).then(revalidated ->
+		{
+			check("reuses cached downloads when unchanged", revalidated && PolymodExtended.isModLoaded("rar5_mod"));
+			return WebMods.loadUrl('$base/redirect/zip_mod.zip', "redirected_zip");
+		}).then(dirName ->
+		{
+			check("follows redirects", dirName == "redirected_zip");
+			return WebMods.loadUrl('$base/named');
+		}).then(dirName ->
+		{
+			check("uses Content-Disposition file names", dirName == "named_mod");
+
+			var started:WebDownload = null;
+			return WebMods.loadUrl('$base/slow.zip', null, false, {
+				cache: false,
+				onStart: download ->
+				{
+					started = download;
+					js.Syntax.code("setTimeout({0}, 100)", () -> download.cancel());
+				}
+			}).then(_ -> "", error -> Std.string(error)).then(message -> message.indexOf("cancelled") != -1 && started != null && started.cancelled);
+		}).then(cancelled ->
+		{
+			check("cancels downloads", cancelled && WebDownload.active.length == 0);
+			return WebMods.loadUrl('$base/big.zip', null, false, {maxBytes: 4096, cache: false}).then(_ -> "", error -> Std.string(error));
+		}).then(message ->
+		{
+			check("enforces the size limit", message.indexOf("limit") != -1);
+			return null;
+		});
+	}
+
+	static function runSources():Promise<Dynamic>
+	{
+		print("\nExternal links");
+		GameBananaSource.apiUrl = '$base/api';
+
+		return WebMods.loadUrl("https://gamebanana.com/mods/123", null, true).then(dirName ->
+		{
+			check("installs GameBanana mods", dirName == "memory_mod" && PolymodExtended.isModLoaded("memory_mod"));
+			return WebMods.getInstalledSource("memory_mod");
+		}).then(source ->
+		{
+			check("remembers where a mod came from", source != null && source.source == "gamebanana" && source.fileId == "9001");
+			return WebMods.loadUrl("https://gamebanana.com/mods/124", "bad_md5", true).then(_ -> "", error -> Std.string(error));
+		}).then(message ->
+		{
+			check("verifies GameBanana checksums", message.indexOf("checksum") != -1);
+			return WebMods.loadUrl("https://gamebanana.com/mods/123", "seven_zip", false, {fileName: "extras.7z"}).then(_ -> "", error -> Std.string(error));
+		}).then(message ->
+		{
+			check("explains unsupported archive formats", message.indexOf(".7z") != -1);
+			return WebMods.checkUpdates();
+		}).then(updates ->
+		{
+			check("reports no update when nothing changed", updates.length == 1 && !updates[0].hasUpdate);
+			serverState().gameBananaFileId = 9002;
+			return WebMods.checkUpdates();
+		}).then(updates ->
+		{
+			check("detects new GameBanana files", updates.length == 1 && updates[0].hasUpdate);
+			return WebMods.updateInstalled("memory_mod");
+		}).then(dirName ->
+		{
+			check("updates installed mods", dirName == "memory_mod");
+			return WebMods.getInstalledSource("memory_mod");
+		}).then(source ->
+		{
+			check("stores the updated source", source != null && source.fileId == "9002");
+			return WebMods.loadUrl('modmanager:$base/fixtures/memory_mod.zip,Mod,123', "one_click");
+		}).then(dirName ->
+		{
+			check("accepts 1-click links", dirName == "one_click");
+			return null;
+		});
+	}
+
+	static function runBackups():Promise<Dynamic>
+	{
+		print("\nBackups");
+		var original:Bytes = null;
+
+		return WebMods.exportInstalled("memory_mod").then(exported ->
+		{
+			original = exported.bytes;
+			check("exports installed mods", exported.name == "memory_mod.zip" && exported.bytes.length > 0);
+			return WebMods.createBackup();
+		}).then(backup ->
+		{
+			check("creates backups", backup.length > original.length);
+			return WebMods.clearInstalled().then(_ -> WebMods.restoreBackup(backup));
+		}).then(restored ->
+		{
+			check("restores backups", restored.contains("memory_mod") && PolymodExtended.isModLoaded("memory_mod"));
+			return WebMods.listInstalled();
+		}).then(installed ->
+		{
+			check("restored mods stay installed", installed.contains("memory_mod"));
+			return WebMods.restoreBackup(Bytes.ofString("nope")).then(_ -> false, _ -> true);
+		}).then(rejected ->
+		{
+			check("rejects files that are not backups", rejected);
+			return null;
+		});
+	}
+
 	static function startServer():Promise<Int>
 	{
-		return new Promise<Int>((resolve, reject) ->
-		{
-			var server:Dynamic = js.Syntax.code("require('http').createServer((request, response) => {
-				const path = require('path');
-				const file = path.join(process.cwd(), decodeURIComponent(request.url.split('?')[0]));
-				require('fs').readFile(file, (error, data) => {
-					if (error) { response.writeHead(404); response.end('not found'); return; }
-					response.writeHead(200);
-					response.end(data);
-				});
-			})");
-			server.listen(0, "127.0.0.1", () -> resolve(server.address().port));
-			server.unref();
-		});
+		return js.Syntax.code("require(require('path').join(process.cwd(), 'web', 'server.js')).start()");
+	}
+
+	static function serverState():Dynamic
+	{
+		return js.Syntax.code("require(require('path').join(process.cwd(), 'web', 'server.js')).state");
 	}
 
 	static function finish():Void

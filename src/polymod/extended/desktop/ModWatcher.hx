@@ -19,10 +19,13 @@ class ModWatcher
 	var snapshot:Map<String, String> = [];
 	var elapsed:Float = 0;
 
-	public function new(path:String, interval:Float = 2.0, ?ignored:Array<String>)
+	public var extraPaths(default, null):Array<String>;
+
+	public function new(path:String, interval:Float = 2.0, ?ignored:Array<String>, ?extraPaths:Array<String>)
 	{
 		this.path = path;
 		this.interval = interval;
+		this.extraPaths = extraPaths != null ? extraPaths.copy() : [];
 
 		if (ignored != null)
 			this.ignored = ignored;
@@ -76,9 +79,11 @@ class ModWatcher
 	function takeSnapshot():Map<String, String>
 	{
 		var result:Map<String, String> = [];
+		var roots = [path].concat(extraPaths);
 
-		if (sys.FileSystem.exists(path) && sys.FileSystem.isDirectory(path))
-			collect(path, "", result);
+		for (i in 0...roots.length)
+			if (roots[i] != null && sys.FileSystem.exists(roots[i]) && sys.FileSystem.isDirectory(roots[i]))
+				collect(roots[i], i == 0 ? "" : '@$i', result);
 
 		return result;
 	}
@@ -101,7 +106,7 @@ class ModWatcher
 			var full = Path.join([directory, name]);
 			var key = relative.length > 0 ? relative + "/" + name : name;
 
-			if (isIgnored(full))
+			if (StringTools.startsWith(name, ".") || isIgnored(full))
 				continue;
 
 			try

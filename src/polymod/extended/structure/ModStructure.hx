@@ -18,6 +18,7 @@ enum abstract StructureIssueKind(String) from String to String
 	var UNKNOWN_FOLDER = "unknown_folder";
 	var WRONG_EXTENSION = "wrong_extension";
 	var MISSING_FOLDER = "missing_folder";
+	var MISSING_ROOT_FILE = "missing_root_file";
 }
 
 typedef StructureIssue =
@@ -25,7 +26,8 @@ typedef StructureIssue =
 	kind:StructureIssueKind,
 	path:String,
 	message:String,
-	?suggestion:String
+	?suggestion:String,
+	?recommended:Bool
 }
 
 class ModStructure
@@ -41,6 +43,10 @@ class ModStructure
 	public var folders:Array<FolderRule>;
 
 	public var rootFiles:Array<String>;
+
+	public var requiredRootFiles:Array<String> = [];
+
+	public var recommendedRootFiles:Array<String> = [];
 
 	public var ignoredFolders:Array<String> = ["_append", "_merge", ".git", ".github", ".vscode"];
 
@@ -187,6 +193,16 @@ class ModStructure
 				});
 		}
 
+		var lowerFiles = [for (file in normalized) file.toLowerCase()];
+
+		for (name in requiredRootFiles)
+			if (!lowerFiles.contains(name.toLowerCase()))
+				issues.push({kind: MISSING_ROOT_FILE, path: name, message: 'Required file "$name" is missing from the root of the mod'});
+
+		for (name in recommendedRootFiles)
+			if (!lowerFiles.contains(name.toLowerCase()))
+				issues.push({kind: MISSING_ROOT_FILE, path: name, message: 'The mod has no "$name"', recommended: true});
+
 		for (folder in folders)
 			if (folder.required == true && !hasAnyFile(normalized, folder.path))
 				issues.push({kind: MISSING_FOLDER, path: folder.path, message: 'Required folder "${folder.path}" is missing or empty'});
@@ -241,6 +257,8 @@ class ModStructure
 			folders: folders,
 			rootFiles: rootFiles,
 			ignoredFolders: ignoredFolders,
+			requiredRootFiles: requiredRootFiles,
+			recommendedRootFiles: recommendedRootFiles,
 			allowUnknownFolders: allowUnknownFolders
 		}, null, pretty ? "\t" : null);
 	}
@@ -274,6 +292,15 @@ class ModStructure
 			structure.ignoredFolders = ignored;
 
 		structure.allowUnknownFolders = Reflect.field(data, "allowUnknownFolders") == true;
+
+		var required = readNames(Reflect.field(data, "requiredRootFiles"));
+		var recommended = readNames(Reflect.field(data, "recommendedRootFiles"));
+
+		if (required != null)
+			structure.requiredRootFiles = required;
+
+		if (recommended != null)
+			structure.recommendedRootFiles = recommended;
 		return structure;
 	}
 
@@ -330,6 +357,14 @@ class ModStructure
 
 		var last = parts[parts.length - 1];
 		return last.length == 0 || StringTools.endsWith(lowerName, last);
+	}
+
+	static function readNames(value:Dynamic):Null<Array<String>>
+	{
+		if (!Std.isOfType(value, Array))
+			return null;
+
+		return [for (item in (value : Array<Dynamic>)) if (Std.isOfType(item, String)) (item : String)];
 	}
 
 	static function readStrings(value:Dynamic):Null<Array<String>>

@@ -13,12 +13,27 @@ import polymod.extended.archive.Archive;
 import polymod.extended.archive.ArchiveFormats;
 import polymod.extended.archive.ZipArchive;
 import polymod.extended.fs.ArchiveFileSystem;
+import polymod.extended.app.ModAppSettings;
+import polymod.extended.hooks.ModHooks;
 import polymod.extended.desktop.DesktopMods;
 import polymod.extended.desktop.ModOrganizer;
+import polymod.extended.desktop.RemoteMods;
+import polymod.extended.sources.DropboxSource;
+import polymod.extended.sources.GameBananaSource;
+import polymod.extended.sources.GoogleDriveSource;
+import polymod.extended.sources.HttpClient;
+import polymod.extended.sources.MediaFireSource;
+import polymod.extended.sources.ModSources;
+import polymod.extended.sources.ModSources.ResolveOptions;
+import polymod.extended.sources.ModSources.ResolvedMod;
+import polymod.extended.sources.HttpClient.MockHttpClient;
+import polymod.extended.desktop.RemoteMods.RemoteProgress;
+import polymod.extended.desktop.RemoteMods.RemoteInstallResult;
 import polymod.extended.structure.FolderLayouts;
 import polymod.extended.structure.FolderMapper;
 import polymod.extended.structure.ModStructure;
 import polymod.extended.structure.StructurePresets;
+import polymod.extended.util.ModPaths;
 import polymod.extended.util.Platform;
 import polymod.extended.util.Signal;
 
@@ -51,6 +66,16 @@ class Main
 		testDesktopMods();
 		section("Folder organization");
 		testOrganization();
+		section("App settings");
+		testAppSettings();
+		section("Mod hooks");
+		testHooks();
+		section("Mod roots");
+		testRoots();
+		section("Mod sources");
+		testSources();
+		section("Remote installs");
+		testRemoteMods();
 
 		Sys.println('\nPassed: $passed, Failed: $failed');
 		Sys.exit(failed > 0 ? 1 : 0);
@@ -502,6 +527,271 @@ class Main
 		check("installs into categories", installed.success && PolymodExtended.getModCategory("rar4_mod").id == "songs");
 		check("rejects invalid category names", !DesktopMods.createCategory("../evil").success);
 		check("loaded every compatible mod", loaded.length > 0 && !PolymodExtended.log.hasErrors());
+	}
+
+	static function testAppSettings():Void
+	{
+		var root = '$OUT/app_mods';
+		mod('$root/theme_mod', "theme_mod", '"app": {"title": "Cool Mod", "fps": 999, "backgroundColor": "#112233", "icon": "icon.png", "width": "big", "secret": 1}');
+		write('$root/theme_mod/icon.png', "fake png");
+		mod('$root/second_mod', "second_mod", '"app": {"title": "Second", "fullscreen": true}');
+
+		var changes = 0;
+		ModAppSettings.onChanged.add(_ -> changes++);
+
+		PolymodExtended.init({modRoot: root, framework: Framework.CUSTOM, customBackend: TestBackend});
+		check("blocks settings the game did not allow", ModAppSettings.get("title") == null && hasLogged(ModAppSettings.APP_SETTING_BLOCKED));
+
+		PolymodExtended.init({modRoot: root, framework: Framework.CUSTOM, customBackend: TestBackend, allowAppSettings: true});
+		check("applies allowed settings", ModAppSettings.get("title") == "Cool Mod" && ModAppSettings.getSource("title") == "theme_mod");
+		check("later mods win", ModAppSettings.get("fullscreen") == true && ModAppSettings.getSource("fullscreen") == "second_mod");
+		check("clamps numbers", ModAppSettings.get("fps") == 360);
+		check("parses colors", ModAppSettings.get("backgroundColor") == 0xFF112233);
+		check("loads files from the mod", ModAppSettings.values.get("icon").bytes.toString() == "fake png");
+		check("rejects invalid values", ModAppSettings.get("width") == null && hasLogged(ModAppSettings.APP_SETTING_INVALID));
+		check("ignores unknown keys", ModAppSettings.get("secret") == null);
+		check("notifies changes", changes > 0);
+
+		PolymodExtended.setModEnabled("theme_mod", false, true);
+		check("updates when mods are disabled", ModAppSettings.get("title") == "Second" && ModAppSettings.get("fps") == null);
+
+		ModAppSettings.allow("speed", {type: FLOAT, min: 0.5, max: 2});
+		check("supports custom rules", ModAppSettings.rules.exists("speed"));
+		check("parses short and long colors", ModAppSettings.parseColor("0x80FF0000") == 0x80FF0000 && ModAppSettings.parseColor("nope") == null);
+		ModAppSettings.block("speed");
+	}
+
+	static function testHooks():Void
+	{
+		ModHooks.clear();
+		var calls:Array<String> = [];
+
+		ModHooks.add("songStart", event -> calls.push("low"), null, -5);
+		ModHooks.add("songStart", event -> calls.push("high"), "some_mod", 10);
+		ModHooks.add("songStart", event -> calls.push("normal:" + event.data.song));
+		var event = ModHooks.call("songStart", {song: "bopeebo"});
+		check("calls listeners by priority", calls.join(",") == "high,normal:bopeebo,low");
+		check("passes event data", !event.cancelled);
+
+		ModHooks.add("noteHit", event -> event.cancel(), "a_mod", 5);
+		ModHooks.add("noteHit", event -> event.stopPropagation(), "a_mod", 1);
+		ModHooks.add("noteHit", event -> calls.push("never"));
+		var hit = ModHooks.call("noteHit");
+		check("cancels events", hit.cancelled);
+		check("stops propagation", !calls.contains("never"));
+		check("respects non-cancelable events", !ModHooks.call("noteHit", null, false).cancelled);
+
+		var onceCalls = 0;
+		ModHooks.once("pause", _ -> onceCalls++);
+		ModHooks.call("pause");
+		ModHooks.call("pause");
+		check("runs once listeners once", onceCalls == 1 && !ModHooks.has("pause"));
+
+		ModHooks.add("broken", _ -> throw "script error", "buggy_mod");
+		for (i in 0...3)
+			ModHooks.call("broken");
+		check("survives listener errors", hasLogged(ModHooks.MOD_HOOK_ERROR));
+		check("removes listeners that keep failing", !ModHooks.has("broken"));
+
+		var loaded:Array<String> = [];
+		ModHooks.add(PolymodExtended.HOOK_MODS_LOADED, event -> loaded = [for (mod in (event.data : Array<ModMetadata>)) mod.id]);
+		PolymodExtended.reload();
+		check("clears mod listeners on reload", ModHooks.count("songStart") == 2 && ModHooks.count("noteHit") == 1);
+		check("fires modsLoaded", loaded.contains("second_mod"));
+		ModHooks.clear();
+	}
+
+	static function testRoots():Void
+	{
+		var primary = '$OUT/root_a';
+		var extra = '$OUT/root_b';
+
+		mod('$primary/a_mod', "a_mod");
+		mod('$primary/songs/primary_song', "primary_song");
+		mod('$extra/b_mod', "b_mod");
+		write('$extra/b_mod/data/info.json', '{"name": "b"}');
+		sys.io.File.copy("mods/zip_mod.zip", '$extra/zip_mod.zip');
+		mod('$extra/songs/extra_song', "extra_song");
+		mod('$extra/skins/skin_x', "skin_x");
+		mod('$extra/a_mod', "a_mod_copy");
+
+		PolymodExtended.init({
+			modRoot: primary,
+			modRoots: [extra],
+			framework: Framework.CUSTOM,
+			customBackend: TestBackend
+		});
+
+		var ids = PolymodExtended.getLoadedModIds();
+		check("loads mods from every root", ["a_mod", "b_mod", "zip_mod", "primary_song", "extra_song", "skin_x"].filter(id -> !ids.contains(id)).length == 0);
+		check("merges categories across roots", PolymodExtended.getModsInCategory("songs").length == 2);
+		check("links whole categories", PolymodExtended.getModCategory("skin_x").id == "skins");
+		check("primary root wins conflicts", !ids.contains("a_mod_copy") && hasLogged(ArchiveFileSystem.ARCHIVE_CONFLICT));
+		check("reads files from extra roots", PolymodExtended.fileSystem.getFileContent('$primary/b_mod/data/info.json') == '{"name": "b"}');
+
+		var location = DesktopMods.getModLocation("b_mod");
+		check("finds the real folder", location != null && StringTools.startsWith(haxe.io.Path.normalize(location), haxe.io.Path.normalize(extra)));
+		check("finds the real archive", DesktopMods.getModLocation("zip_mod") == haxe.io.Path.join([extra, "zip_mod.zip"]));
+
+		DesktopMods.startWatching(0.1);
+		mod('$extra/late_mod', "late_mod");
+		check("watches extra roots", DesktopMods.update(0.2) && PolymodExtended.isModLoaded("late_mod"));
+		DesktopMods.stopWatching();
+
+		check("uninstalls from extra roots", DesktopMods.uninstallMod("b_mod") && !sys.FileSystem.exists('$extra/b_mod'));
+
+		var user = ModPaths.userRoot("My: Game");
+		check("builds a user mods folder", StringTools.endsWith(haxe.io.Path.normalize(user), "My_ Game/mods"));
+		check("lists default roots", ModPaths.defaultRoots("My Game").length >= 1);
+		check("sanitizes folder names", ModPaths.sanitize("a:b/c.") == "a_b_c");
+		check("checks write access", ModPaths.isWritable('$OUT/writable') && sys.FileSystem.exists('$OUT/writable'));
+		check("android shared folder", ModPaths.androidSharedRoot("FNF Mods") == "/storage/emulated/0/FNF Mods/mods");
+
+		var rules = new ModStructure("rules", [{path: "data"}]);
+		rules.requiredRootFiles = ["_polymod_meta.json", "credits.txt"];
+		rules.recommendedRootFiles = ["_polymod_icon.png"];
+		var rootIssues = rules.validate(["_polymod_meta.json", "data/a.json"]);
+		check("requires root files", rootIssues.filter(issue -> issue.kind == MISSING_ROOT_FILE && issue.path == "credits.txt" && issue.recommended != true).length == 1);
+		check("recommends root files", rootIssues.filter(issue -> issue.path == "_polymod_icon.png" && issue.recommended == true).length == 1);
+		check("loads root file rules from JSON", ModStructure.fromJson('{"folders": ["data"], "requiredRootFiles": ["Pack.json"]}').requiredRootFiles[0] == "Pack.json");
+	}
+
+	static function resolveWith(http:MockHttpClient, link:String, ?options:ResolveOptions):{?mod:ResolvedMod, ?error:String}
+	{
+		var result:{?mod:ResolvedMod, ?error:String} = {error: "no callback"};
+		ModSources.resolve(link, options, mod -> result = {mod: mod}, error -> result = {error: error}, http);
+		return result;
+	}
+
+	static function testSources():Void
+	{
+		var gameBanana = '{"_idRow": 707303, "_sName": "Infected Players", "_sVersion": "2.0", "_tsDateUpdated": 1791733059, "_aFiles": ['
+			+ '{"_idRow": 1, "_sFile": "old.zip", "_sDownloadUrl": "https://gamebanana.com/dl/1", "_bIsArchived": true, "_sAvResult": "clean"},'
+			+ '{"_idRow": 1845259, "_sFile": "players_blue.zip", "_nFilesize": 90348794, "_sDownloadUrl": "https://gamebanana.com/dl/1845259", '
+			+ '"_sMd5Checksum": "5c67baec44c462374d99e63388b1f56e", "_bIsArchived": false, "_sAvResult": "clean", "_sVersion": "2.1"},'
+			+ '{"_idRow": 1845267, "_sFile": "players_normal.zip", "_nFilesize": 89303480, "_sDownloadUrl": "https://gamebanana.com/dl/1845267", '
+			+ '"_sMd5Checksum": "", "_bIsArchived": false, "_sAvResult": "clean"}]}';
+		var release = '{"tag_name": "v1.2.0", "name": "Big Update", "published_at": "2026-05-01T10:00:00Z", "assets": ['
+			+ '{"id": 11, "name": "source.txt", "browser_download_url": "https://github.com/me/mod/releases/download/v1.2.0/source.txt", "size": 3},'
+			+ '{"id": 12, "name": "MyMod.zip", "browser_download_url": "https://github.com/me/mod/releases/download/v1.2.0/MyMod.zip", "size": 2048}]}';
+		var http = new MockHttpClient([
+			"https://gamebanana.com/apiv11/Mod/707303/ProfilePage" => gameBanana,
+			"https://api.github.com/repos/me/mod/releases/latest" => release,
+			"https://api.github.com/repos/me/norelease" => '{"default_branch": "develop"}',
+			"https://www.mediafire.com/file/abc123/pack.zip/file" => '<a class="input popsok" aria-label="Download file" href="https://download1234.mediafire.com/xyz/abc123/pack.zip" id="downloadButton">Download</a>'
+		]);
+
+		var gb = resolveWith(http, "https://gamebanana.com/mods/707303");
+		check("resolves GameBanana mod pages", gb.mod != null && gb.mod.url == "https://gamebanana.com/dl/1845259" && gb.mod.fileName == "players_blue.zip");
+		check("reads GameBanana file details", gb.mod.md5 == "5c67baec44c462374d99e63388b1f56e" && gb.mod.size == 90348794 && gb.mod.version == "2.1"
+			&& gb.mod.files.length == 2 && gb.mod.sourceId == "Mod/707303" && gb.mod.title == "Infected Players");
+		check("picks GameBanana files by name", resolveWith(http, "https://gamebanana.com/mods/707303", {fileName: "players_normal.zip"}).mod.fileId == "1845267");
+		check("ignores empty checksums", resolveWith(http, "https://gamebanana.com/mods/707303", {fileIndex: 1}).mod.md5 == null);
+		check("accepts GameBanana download links", resolveWith(http, "https://gamebanana.com/dl/1845259").mod.fileId == "1845259");
+		check("rejects other GameBanana pages", resolveWith(http, "https://gamebanana.com/members/1").error != null);
+
+		var oneClick = ModSources.parseOneClick("funkin:https://gamebanana.com/mmdl/1845259,Mod,707303,zip");
+		check("parses 1-click links", oneClick.scheme == "funkin" && oneClick.url == "https://gamebanana.com/mmdl/1845259" && oneClick.itemType == "Mod"
+			&& oneClick.itemId == "707303" && oneClick.extension == "zip");
+		check("resolves 1-click links", resolveWith(http, "funkin:https://gamebanana.com/mmdl/1845259,Mod,707303").mod.fileId == "1845259");
+
+		var gh = resolveWith(http, "https://github.com/me/mod");
+		check("resolves the latest GitHub release", gh.mod.url == "https://github.com/me/mod/releases/download/v1.2.0/MyMod.zip" && gh.mod.version == "v1.2.0");
+		check("falls back to the repository zip", resolveWith(http, "https://github.com/me/norelease").mod.url
+			== "https://codeload.github.com/me/norelease/zip/refs/heads/develop");
+		check("downloads GitHub branches", resolveWith(http, "https://github.com/me/mod/tree/beta").mod.url == "https://codeload.github.com/me/mod/zip/refs/heads/beta");
+		check("keeps direct GitHub downloads", resolveWith(http, "https://github.com/me/mod/releases/download/v1/a.zip").mod.version == "v1");
+
+		check("converts Google Drive links", resolveWith(http, "https://drive.google.com/file/d/1AbC_dEf-2/view?usp=sharing").mod.url
+			== "https://drive.usercontent.google.com/download?id=1AbC_dEf-2&export=download&confirm=t");
+		check("reads Google Drive ids from queries", GoogleDriveSource.fileId("https://drive.google.com/open?id=XYZ_123") == "XYZ_123");
+		check("rejects Google Drive folders", resolveWith(http, "https://drive.google.com/drive/folders/abc").error != null);
+		check("converts Dropbox links", DropboxSource.directUrl("https://www.dropbox.com/scl/fi/abc/pack.zip?rlkey=k&dl=0") == "https://www.dropbox.com/scl/fi/abc/pack.zip?rlkey=k&dl=1");
+		check("finds MediaFire download links", resolveWith(http, "https://www.mediafire.com/file/abc123/pack.zip/file").mod.url
+			== "https://download1234.mediafire.com/xyz/abc123/pack.zip");
+		check("reports missing MediaFire buttons", MediaFireSource.findDownloadLink("<html></html>") == null);
+
+		check("keeps unknown links as direct downloads", resolveWith(http, "https://example.com/mods/pack.rar").mod.source == "direct");
+		check("rejects things that are not links", resolveWith(http, "C:/mods/pack.zip").error != null);
+		check("explains unsupported formats", ModSources.unsupportedArchiveMessage("pack.7z").indexOf(".7z") != -1);
+
+		ModSources.corsProxy = "https://proxy.example/?url=";
+		check("proxies blocked hosts", ModSources.proxied("https://gamebanana.com/dl/1") == "https://proxy.example/?url=https%3A%2F%2Fgamebanana.com%2Fdl%2F1");
+		check("leaves other hosts alone", ModSources.proxied("https://example.com/a.zip") == "https://example.com/a.zip");
+		ModSources.corsProxy = null;
+	}
+
+	static function testRemoteMods():Void
+	{
+		var server = new sys.io.Process("python3", ["fixtures/server.py"]);
+		var port = Std.parseInt(server.stdout.readLine());
+		var base = 'http://127.0.0.1:$port';
+		var root = '$OUT/remote_mods';
+		sys.FileSystem.createDirectory(root);
+
+		PolymodExtended.init({
+			modRoot: root,
+			framework: Framework.CUSTOM,
+			customBackend: TestBackend
+		});
+
+		var progress:Array<RemoteProgress> = [];
+		RemoteMods.onProgress.add(event -> progress.push(event));
+
+		var direct = RemoteMods.install('$base/mods/rar5_mod.rar');
+		check("installs mods from links", direct.success && PolymodExtended.isModLoaded("rar5_mod") && sys.FileSystem.exists('$root/rar5_mod.rar'));
+		check("reports download progress", progress.length > 0 && progress[progress.length - 1].ratio == 1);
+		check("cleans up downloads", !sys.FileSystem.exists('$root/.downloads'));
+
+		var named = RemoteMods.install('$base/named', {category: "links"});
+		check("uses Content-Disposition names", named.success && named.id == "zip_mod" && sys.FileSystem.exists('$root/links/zip_mod.zip'));
+
+		GameBananaSource.apiUrl = '$base/api';
+		var gb = RemoteMods.install("https://gamebanana.com/mods/123");
+		check("installs GameBanana mods through redirects", gb.success && gb.id == "memory_mod" && PolymodExtended.isModLoaded("memory_mod"));
+		check("records the source", RemoteMods.getSource("memory_mod") != null && RemoteMods.getSource("memory_mod").fileId == "9001");
+
+		var bad = RemoteMods.install("https://gamebanana.com/mods/124", {replace: true});
+		check("rejects corrupted downloads", !bad.success && bad.error.indexOf("checksum") != -1);
+
+		var limited = RemoteMods.install('$base/big.zip', {maxBytes: 1024});
+		check("enforces the size limit", !limited.success && limited.error.indexOf("limit") != -1 && !sys.FileSystem.exists('$root/big.zip'));
+
+		var missing = RemoteMods.install('$base/nothing.zip');
+		check("reports HTTP errors", !missing.success && missing.error.indexOf("404") != -1);
+
+		var duplicate = RemoteMods.install('$base/mods/rar5_mod.rar');
+		check("refuses duplicates unless replacing", !duplicate.success && duplicate.error.indexOf("already installed") != -1);
+
+		var updates = RemoteMods.checkUpdates();
+		check("checks for updates", updates.filter(u -> u.id == "memory_mod" && !u.hasUpdate).length == 1);
+
+		var http = new haxe.Http('$base/state/next');
+		http.request(false);
+		updates = RemoteMods.checkUpdates(["memory_mod"]);
+		check("detects new versions", updates.length == 1 && updates[0].hasUpdate);
+
+		var updated = RemoteMods.updateMod("memory_mod");
+		check("updates mods in place", updated.success && RemoteMods.getSource("memory_mod").fileId == "9002" && PolymodExtended.isModLoaded("memory_mod"));
+		check("keeps the category when updating", RemoteMods.updateMod("zip_mod").success && sys.FileSystem.exists('$root/links/zip_mod.zip'));
+
+		DesktopMods.uninstallMod("memory_mod");
+		check("forgets sources of uninstalled mods", RemoteMods.getSource("memory_mod") == null);
+
+		var finished:RemoteInstallResult = null;
+		RemoteMods.installAsync('$base/mods/rar4_mod.rar', null, result -> finished = result);
+		var waited = 0.0;
+
+		while (finished == null && waited < 10)
+		{
+			Sys.sleep(0.05);
+			waited += 0.05;
+			RemoteMods.update();
+		}
+
+		check("installs in the background", finished != null && finished.success && PolymodExtended.isModLoaded("rar4_mod"));
+
+		server.close();
 	}
 
 	static function mod(path:String, id:String, ?extra:String):Void

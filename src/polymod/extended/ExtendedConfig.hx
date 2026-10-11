@@ -12,6 +12,7 @@ import thx.semver.VersionRule;
 typedef ExtendedConfig =
 {
 	?modRoot:String,
+	?modRoots:Array<String>,
 	?modList:ModList,
 	?settings:ModSettings,
 	?modListFile:String,
@@ -25,6 +26,7 @@ typedef ExtendedConfig =
 	?gameLayout:String,
 	?detectLayouts:Bool,
 	?layoutMappings:Map<String, Array<FolderMapping>>,
+	?allowAppSettings:Bool,
 	?framework:Framework,
 	?frameworkParams:FrameworkParams,
 	?customBackend:Class<IBackend>,

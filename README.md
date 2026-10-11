@@ -11,6 +11,9 @@ polymod-extended keeps Polymod as the engine underneath and adds a management la
 - A web API for HTML5 builds: mods from URLs, uploads, drag and drop, and mods kept in the browser
 - A desktop API: install, uninstall, export and create mods, open the mods folder and reload when files change
 - Folder organization: categories as subfolders, a standard mod structure with validation, folder mapping between engines (Psych, V-Slice, Codename) and automatic file organizing
+- Mods from links: GameBanana, GitHub, Google Drive, Dropbox, MediaFire and direct URLs, with update checks
+- Mods that change the game: allowed app settings (title, icon, FPS, window) and an event hook system for scripts
+- Several mod folders at once and the right default mods folder for each platform
 - One-call reloading, a central error log and signals your game can listen to
 
 ## Installation
@@ -106,14 +109,30 @@ WebMods.restoreInstalled().then(_ -> WebMods.loadIndex("mods/index.json"));
 
 | Function | Description |
 | --- | --- |
-| `loadUrl(url, ?dirName, install)` | Downloads a `.zip` or `.rar` and loads it. With `install: true` it is also kept in the browser. |
+| `loadUrl(url, ?dirName, install, ?options)` | Downloads a `.zip` or `.rar` (or any supported link, see Mods from links) and loads it. With `install: true` it is also kept in the browser. |
 | `loadIndex(url, install)` | Loads every mod listed in a JSON index, see below |
 | `openFilePicker(multiple)` | Opens the browser file picker and installs the chosen archives. Call it from a click or key press. |
 | `enableDropZone(?element)` | Installs archives dropped on the page (or on `element`). Returns a function that turns it off. |
 | `installBytes(bytes, name)` / `installBlob(file)` | Installs an archive you already have |
 | `restoreInstalled()` | Loads every mod the player installed before. Call it once at startup. |
 | `uninstall(dirName)` / `clearInstalled()` / `listInstalled()` | Manages installed mods |
-| `onInstalled` / `onUninstalled` / `onLoadFailed` | Signals |
+| `checkUpdates()` / `updateInstalled(dirName)` | Checks and updates mods installed from links |
+| `exportInstalled(dirName)` / `saveFile(bytes, name)` | Gets an installed archive back and offers it as a browser download |
+| `createBackup()` / `restoreBackup(bytes)` | One `.zip` with every installed mod, the mod list and the settings |
+| `getStorageEstimate()` / `requestPersistentStorage()` | Browser storage usage, and asking the browser not to clear it |
+| `clearCache()` | Forgets cached downloads |
+| `onInstalled` / `onUninstalled` / `onLoadFailed` / `onProgress` / `onStorageWarning` | Signals |
+
+`loadUrl` options: `install`, `dirName`, `cache` (default `WebMods.cacheDownloads`), `maxBytes` (default `WebMods.maxModSize`, 256 MB), `fileIndex` / `fileName` (which file of a GameBanana page or GitHub release), `onProgress` and `onStart`. `onStart` receives the `WebDownload`, which has `cancel()`, `loaded` and `total`. `WebDownload.cancelAll()` stops every download.
+
+```haxe
+WebMods.loadUrl("https://gamebanana.com/mods/123456", null, true, {
+	onProgress: progress -> loadingBar.value = progress.ratio,
+	onStart: download -> cancelButton.onClick = download.cancel
+});
+```
+
+Downloads are cached in IndexedDB together with their `ETag`/`Last-Modified`, so loading the same URL again only asks the server whether it changed, and works offline. Installs fail with a clear message when a mod is over the size limit or the browser has no room left, and `onStorageWarning` fires once usage passes `storageWarningRatio` (90%). GameBanana checksums are verified after downloading.
 
 Installed mods are stored in IndexedDB, so they survive page reloads. The mod list and settings go to `localStorage` under the names given in `modListFile` and `settingsFile`. All functions return promises and reload the mods when they finish (set `WebMods.autoReload = false` to reload yourself).
 
@@ -131,6 +150,115 @@ A mod index is a JSON file with URLs relative to the index itself:
 Mods that are not archives can be added from code with `VirtualFileSystem.addFolderMod(dirName, files)`.
 
 Note: in our tests, the current Polymod git version fails to compile for HTML5 because some `#if html5` blocks in its HScript interpreter are also compiled inside macros. If you hit `Type not found : HxOverrides`, change those lines to `#if (html5 && !macro)`, as the web job in `.github/workflows/test.yml` does.
+
+Dropping a link (for example from a GameBanana page) on a drop zone installs it like a dropped file.
+
+## Mods from links
+
+`ModSources` turns a share link into a direct download. It is used by `WebMods.loadUrl` on the web and `RemoteMods.install` on native targets:
+
+| Site | Accepted links |
+| --- | --- |
+| GameBanana | Mod pages (`gamebanana.com/mods/123`), sound and WiP pages, `gamebanana.com/dl/...` links and 1-click links (`yourgame:https://gamebanana.com/mmdl/...,Mod,123`). Uses the GameBanana API to pick the file, skips archived files and files that did not pass GameBanana's antivirus, and checks the MD5. |
+| GitHub | Repositories (latest release, or the default branch zip when there are no releases), release pages, `releases/download` links and branch links (`/tree/branch`) |
+| Google Drive | File share links (`/file/d/ID/view`, `open?id=ID`) |
+| Dropbox | Share links (`dl=0` becomes `dl=1`) |
+| MediaFire | File pages, the real download link is read from the page |
+| Anything else | Used as a direct download |
+
+When a page has several files, the first `.zip`/`.rar` is used; pass `fileName` or `fileIndex` to choose. Links to `.7z` and other formats are refused with a message saying which formats work. Add your own site with `ModSources.register(source)`.
+
+On native targets:
+
+```haxe
+import polymod.extended.desktop.RemoteMods;
+
+RemoteMods.onProgress.add(progress -> loadingBar.value = progress.ratio);
+RemoteMods.installAsync("https://gamebanana.com/mods/123456", {category: "songs"}, result ->
+{
+	if (!result.success)
+		showError(result.error);
+});
+```
+
+| Function | Description |
+| --- | --- |
+| `install(link, ?options)` | Downloads and installs, blocking until it finishes |
+| `installAsync(link, ?options, ?onDone)` | Same in a background thread; `onDone` and `onProgress` run on the main thread during `DesktopMods.update(elapsed)` (or `RemoteMods.update()`) |
+| `cancel()` | Stops the current download |
+| `resolve(link)` | Only finds the direct link and file details |
+| `getSource(id)` | Where an installed mod came from |
+| `checkUpdates(?ids)` / `updateMod(id)` | Compares with the site (file id, version or date) and reinstalls in place, keeping the category |
+
+Options: `category`, `replace`, `reload`, `enable`, `fileIndex`, `fileName`, `maxBytes` (default `RemoteMods.maxModSize`, 512 MB). Downloads go to `mods/.downloads` and are removed after installing; sources are saved in `mods/.sources.json`.
+
+Browsers block downloads from most of these sites unless they send CORS headers, and many file hosts (including the ones above) do not send them for their downloads. For HTML5 builds, set `ModSources.corsProxy` to a proxy you control (`"https://your-proxy/?url="` or a template with `{url}`). It is only used for the hosts in `ModSources.proxyHosts`, or for every request with `ModSources.proxyAll`.
+
+## Mods that change the game
+
+### App settings
+
+Mods can change a few app settings through an `app` block in `_polymod_meta.json`, but only the ones the game allows:
+
+```json
+{
+  "app": { "title": "Funkin' Remix", "icon": "icon.png", "fps": 144, "backgroundColor": "#1A1A2E" }
+}
+```
+
+```haxe
+PolymodExtended.init({allowAppSettings: true});
+ModAppSettings.allow("noteSkin", {type: STRING, maxLength: 32});
+ModAppSettings.onChanged.add(values -> applyMyGameSettings(values));
+```
+
+`allowAppSettings: true` (or `ModAppSettings.allowDefaults()`) allows `title`, `icon` (a PNG inside the mod), `fps` (30 to 360), `width`, `height`, `fullscreen`, `antialiasing` and `backgroundColor`. Types are `string`, `int`, `float`, `bool`, `color` and `file`, with optional `min`, `max`, `maxLength` and `extensions`. Values outside the range are clamped, invalid values and keys the game did not allow are ignored with a warning, and the last loaded mod wins when two mods set the same key. On Lime targets the title, icon, FPS, size and fullscreen are applied to the window and restored when the mods are disabled; everything else is up to the game through `onChanged`, `get(key)` and `getSource(key)`.
+
+### Hooks
+
+`ModHooks` is an event bus between the game and mod scripts:
+
+```haxe
+var event = ModHooks.call("noteHit", {note: note, player: true});
+
+if (event.cancelled)
+	return;
+```
+
+```haxe
+ModHooks.add("noteHit", event -> event.data.note.alpha = 0.5, "my_mod", 10);
+```
+
+Listeners run from highest to lowest priority. `event.cancel()` marks the event as cancelled (unless the game called it with `cancelable: false`), `event.stopPropagation()` skips the remaining listeners and `event.result` can carry a value back. A listener that throws is logged and, after `ModHooks.maxErrors` errors, removed, so a broken script does not break the game. Listeners added with a mod id are cleared on every reload; the game's own listeners stay. `modsLoaded` is called after every load. With `useScriptedClasses: true`, `ModHooks` and `ModEvent` are imported automatically in Polymod scripted classes.
+
+## Mod folders
+
+### Several roots
+
+```haxe
+import polymod.extended.util.ModPaths;
+
+var roots = ModPaths.defaultRoots("My Game");
+PolymodExtended.init({modRoot: roots[0], modRoots: roots.slice(1)});
+```
+
+Mods from `modRoots` are loaded as if they were in `modRoot`: categories with the same name are merged, and when a mod folder exists in more than one root the first one wins with a warning. Installing, creating and moving mods use `modRoot`; uninstalling, organizing and opening folders find the real folder in any root, and the watcher watches every root.
+
+### Default folders per platform
+
+| Function | Result |
+| --- | --- |
+| `ModPaths.bundledRoot()` | `mods` next to the executable on desktop (outside the `.app` on macOS), `null` on mobile |
+| `ModPaths.userRoot(game, ?company)` | Windows `%APPDATA%/[company/]game/mods`, macOS `~/Library/Application Support/game/mods`, Linux `$XDG_DATA_HOME` or `~/.local/share/game/mods`, Android `/storage/emulated/0/Android/data/<package>/files/mods`, iOS the app's Documents folder |
+| `ModPaths.androidSharedRoot(name)` | `/storage/emulated/0/<name>/mods`, visible to file managers but needs the "all files access" permission on Android 11+ |
+| `ModPaths.defaultRoots(game)` | Bundled and user folders, in that order |
+| `ModPaths.ensure(path)` / `isWritable(path)` | Creates a folder / checks it can be written |
+
+The Android app folder needs no permission. On iOS, set `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` in the app's plist so players can reach the folder from the Files app.
+
+### Files in the root of each mod
+
+`ModStructure.requiredRootFiles` and `recommendedRootFiles` (both empty by default, and both readable from JSON) report files missing from the root of a mod, for example `["_polymod_meta.json", "credits.txt"]` and `["_polymod_icon.png"]`. Recommended files are reported with `recommended: true`.
 
 ## Desktop
 
@@ -309,6 +437,7 @@ polymod-extended reads extra fields from each mod's `_polymod_meta.json`. Every 
 | `hidden` | Hides the mod from `getVisibleMods()`, for library mods players should not toggle. |
 | `tags` | Free-form tags for filtering with `getModsByTag()`. |
 | `category` | Category name for mods that are not inside a category folder. |
+| `app` | App settings the mod wants to change, see App settings. |
 | `layout` | Folder layout the mod was made for (`psych`, `vslice`, `codename` or a registered one). |
 | `folders` | Extra folder mappings for this mod, see Folder mapping. |
 | `data` | Any JSON value, available through `getModData(id)` for your engine to use. |
@@ -356,6 +485,7 @@ Accepts the usual Polymod options (`framework`, `frameworkParams`, `customBacken
 | Field | Default | Description |
 | --- | --- | --- |
 | `modRoot` | `"./mods"` | Folder that contains the mods |
+| `modRoots` | none | Extra folders whose mods are loaded too |
 | `modList` | loaded from `modListFile` | Saved order and enabled state |
 | `settings` | loaded from `settingsFile` | Saved mod settings |
 | `modListFile` / `settingsFile` | none | JSON files used for loading and saving (`localStorage` keys on the web) |
@@ -368,6 +498,7 @@ Accepts the usual Polymod options (`framework`, `frameworkParams`, `customBacken
 | `gameLayout` | none | Your game's folder layout, enables mapping for mods made for other engines |
 | `detectLayouts` | `true` | Detect each mod's layout from its files |
 | `layoutMappings` | none | Custom mappings per mod layout, replacing the built-in ones |
+| `allowAppSettings` | `false` | Let mods change the default app settings |
 | `skipDependencyErrors` | `true` | Skip only the mods with missing dependencies |
 | `maxLogEntries` | `256` | Size limit of the error log, `0` for unlimited |
 

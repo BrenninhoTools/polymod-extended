@@ -22,7 +22,7 @@ typedef ModSettingChange =
 
 class PolymodExtended
 {
-	public static inline final VERSION:String = "0.4.0";
+	public static inline final VERSION:String = "0.5.0";
 
 	public static inline final DEFAULT_MOD_ROOT:String = "./mods";
 
@@ -41,6 +41,8 @@ class PolymodExtended
 	public static inline final MOD_STRUCTURE:PolymodErrorCode = "mod_structure";
 
 	public static inline final MOD_LAYOUT:PolymodErrorCode = "mod_layout";
+
+	public static inline final HOOK_MODS_LOADED:String = "modsLoaded";
 
 	public static var maxStructureWarnings:Int = 10;
 
@@ -95,6 +97,15 @@ class PolymodExtended
 			log.maxEntries = current.maxLogEntries;
 
 		Polymod.onError = handleError;
+
+		if (current.allowAppSettings == true)
+			polymod.extended.app.ModAppSettings.allowDefaults();
+
+		if (current.useScriptedClasses == true)
+		{
+			Polymod.addDefaultImport(polymod.extended.hooks.ModHooks, "ModHooks");
+			Polymod.addDefaultImport(polymod.extended.hooks.ModHooks.ModEvent, "ModEvent");
+		}
 
 		modList = current.modList != null ? current.modList : loadModListFile();
 		settings = current.settings != null ? current.settings : loadSettingsFile();
@@ -367,7 +378,10 @@ class PolymodExtended
 
 		Polymod.unloadAllMods();
 		loadedMods = [];
+		polymod.extended.hooks.ModHooks.clearMods();
+		polymod.extended.app.ModAppSettings.refresh(loadedMods);
 		onModsLoaded.dispatch(loadedMods);
+		polymod.extended.hooks.ModHooks.call(HOOK_MODS_LOADED, loadedMods, false);
 	}
 
 	public static function save():Void
@@ -397,10 +411,14 @@ class PolymodExtended
 		for (warning in resolved.warnings)
 			Polymod.warning(MOD_ORDER_WARNING, warning, INIT);
 
+		polymod.extended.hooks.ModHooks.clearMods();
+
 		var dirs = [for (id in resolved.order) getModDir(id)];
 		var result = first ? Polymod.init(buildParams(dirs)) : Polymod.loadOnlyModsByDir(dirs);
 		loadedMods = result != null ? result : [];
+		polymod.extended.app.ModAppSettings.refresh(loadedMods);
 		onModsLoaded.dispatch(loadedMods);
+		polymod.extended.hooks.ModHooks.call(HOOK_MODS_LOADED, loadedMods, false);
 	}
 
 	static function applyLayouts():Void
@@ -625,7 +643,7 @@ class PolymodExtended
 
 		#if sys
 		if (config.archives != false)
-			return new polymod.extended.fs.ArchiveFileSystem({modRoot: config.modRoot});
+			return new polymod.extended.fs.ArchiveFileSystem({modRoot: config.modRoot}, config.modRoots);
 
 		return PolymodFileSystem.makeFileSystem(null, {modRoot: config.modRoot});
 		#else

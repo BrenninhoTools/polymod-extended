@@ -28,6 +28,8 @@ class ModOptions
 
 	public var layout:Null<String> = null;
 
+	public var app:Dynamic = null;
+
 	public var folders:Array<{from:String, to:String}> = [];
 
 	public var settings:Array<ModSetting> = [];
@@ -203,6 +205,16 @@ class ModOptions
 			}
 			else
 				errors.push("\"settings\" must be an array");
+		}
+
+		var app:Dynamic = Reflect.field(json, "app");
+
+		if (app != null)
+		{
+			if (Type.typeof(app) == TObject)
+				options.app = app;
+			else
+				errors.push("\"app\" must be an object");
 		}
 
 		options.data = Reflect.field(json, "data");

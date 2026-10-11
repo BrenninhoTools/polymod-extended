@@ -94,6 +94,10 @@ class DesktopMods
 		}
 
 		var folder = Path.join([modRoot, dirName]);
+
+		if (Std.isOfType(fileSystem, ArchiveFileSystem))
+			folder = (cast fileSystem : ArchiveFileSystem).realPath(folder);
+
 		return sys.FileSystem.exists(folder) ? folder : null;
 	}
 
@@ -171,6 +175,7 @@ class DesktopMods
 
 		PolymodExtended.modList.remove(id);
 		PolymodExtended.saveModList();
+		RemoteMods.forget(id);
 		finishChange(reload);
 		onUninstalled.dispatch(id);
 		return true;
@@ -350,7 +355,8 @@ class DesktopMods
 	public static function startWatching(interval:Float = 2.0):ModWatcher
 	{
 		stopWatching();
-		watcher = new ModWatcher(modRoot, interval, [PolymodExtended.config.modListFile, PolymodExtended.config.settingsFile]);
+		watcher = new ModWatcher(modRoot, interval, [PolymodExtended.config.modListFile, PolymodExtended.config.settingsFile],
+			PolymodExtended.config.modRoots);
 		watcher.onChanged.add(changed ->
 		{
 			onModsChanged.dispatch(changed);
@@ -371,6 +377,7 @@ class DesktopMods
 
 	public static function update(elapsed:Float):Bool
 	{
+		RemoteMods.update();
 		return watcher != null && watcher.update(elapsed);
 	}
 
