@@ -11,6 +11,8 @@ import polymod.extended.sources.GameBananaSource;
 import polymod.extended.web.WebDownload;
 import polymod.extended.web.WebDownload.DownloadProgress;
 import polymod.extended.web.WebMods;
+import polymod.extended.images.ModImages;
+import polymod.extended.scripting.ModScripts;
 
 class WebMain
 {
@@ -26,7 +28,7 @@ class WebMain
 		{
 			base = 'http://127.0.0.1:$port';
 			return run();
-		}).then(_ -> runDownloads()).then(_ -> runSources()).then(_ -> runBackups()).then(_ -> finish(), error ->
+		}).then(_ -> runDownloads()).then(_ -> runSources()).then(_ -> runBackups()).then(_ -> runScripting()).then(_ -> finish(), error ->
 		{
 			print('Unexpected error: $error');
 			failed++;
@@ -267,6 +269,27 @@ class WebMain
 			check("rejects files that are not backups", rejected);
 			return null;
 		});
+	}
+
+	static function runScripting():Promise<Dynamic>
+	{
+		print("\nImages and scripts");
+
+		PolymodExtended.init({modRoot: "mods", framework: Framework.CUSTOM, customBackend: TestBackend, scripts: true});
+		var fs:VirtualFileSystem = cast PolymodExtended.fileSystem;
+		var png = Bytes.ofHex("89504e470d0a1a0a0000000d494844520000002000000010080600000000000000");
+		fs.addFolderMod("web_art", [
+			"_polymod_meta.json" => Bytes.ofString('{"id": "web_art", "title": "Web Art", "api_version": "0.1.0", "mod_version": "1.0.0"}'),
+			"images/icons/star.png" => png,
+			"images/icons/star.txt" => Bytes.ofString("star0 = 0 0 16 16\nstar1 = 16 0 16 16"),
+			"scripts/main.hx" => Bytes.ofString("var total = 0; function add(n) { total += n; return total; }")
+		]);
+		PolymodExtended.reload();
+
+		check("finds images on the web", ModImages.getSource("icons/star") == "web_art" && ModImages.getInfo("icons/star").width == 32);
+		check("reads atlases on the web", ModImages.getAtlas("icons/star").frames.length == 2);
+		check("runs scripts on the web", ModScripts.call("add", [5]).join(",") == "5");
+		return Promise.resolve(null);
 	}
 
 	static function startServer():Promise<Int>

@@ -26,6 +26,7 @@ jobs:
           haxelib install lime --quiet
           haxelib install thx.core --quiet
           haxelib install thx.semver --quiet
+          haxelib install hscript --quiet
           haxelib git jsonpath https://github.com/EliteMasterEric/jsonpath --quiet
           haxelib git jsonpatch https://github.com/EliteMasterEric/jsonpatch --quiet
           haxelib git polymod https://github.com/larsiusprime/polymod --quiet
@@ -59,6 +60,7 @@ jobs:
           haxelib install lime --quiet
           haxelib install thx.core --quiet
           haxelib install thx.semver --quiet
+          haxelib install hscript --quiet
           haxelib git jsonpath https://github.com/EliteMasterEric/jsonpath --quiet
           haxelib git jsonpatch https://github.com/EliteMasterEric/jsonpatch --quiet
           haxelib git polymod https://github.com/larsiusprime/polymod --quiet

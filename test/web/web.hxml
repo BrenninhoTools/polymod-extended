@@ -3,6 +3,7 @@
 -cp ../../src
 -lib lime
 -lib polymod
+-lib hscript
 -D html5
 -D POLYMOD_EXTENDED
 -main WebMain

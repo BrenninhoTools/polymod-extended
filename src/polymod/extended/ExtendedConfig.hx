@@ -27,6 +27,7 @@ typedef ExtendedConfig =
 	?detectLayouts:Bool,
 	?layoutMappings:Map<String, Array<FolderMapping>>,
 	?allowAppSettings:Bool,
+	?scripts:Bool,
 	?framework:Framework,
 	?frameworkParams:FrameworkParams,
 	?customBackend:Class<IBackend>,

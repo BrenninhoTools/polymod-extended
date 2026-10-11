@@ -14,6 +14,12 @@ import polymod.extended.archive.ArchiveFormats;
 import polymod.extended.archive.ZipArchive;
 import polymod.extended.fs.ArchiveFileSystem;
 import polymod.extended.app.ModAppSettings;
+import polymod.extended.images.ImageAtlas;
+import polymod.extended.images.ImageInfo;
+import polymod.extended.images.ModImages;
+import polymod.extended.scripting.ModScript;
+import polymod.extended.scripting.ModScripts;
+import polymod.extended.scripting.ScriptSandbox;
 import polymod.extended.hooks.ModHooks;
 import polymod.extended.desktop.DesktopMods;
 import polymod.extended.desktop.ModOrganizer;
@@ -72,6 +78,10 @@ class Main
 		testHooks();
 		section("Mod roots");
 		testRoots();
+		section("Mod images");
+		testImages();
+		section("Mod scripts");
+		testScripts();
 		section("Mod sources");
 		testSources();
 		section("Remote installs");
@@ -654,6 +664,184 @@ class Main
 		check("requires root files", rootIssues.filter(issue -> issue.kind == MISSING_ROOT_FILE && issue.path == "credits.txt" && issue.recommended != true).length == 1);
 		check("recommends root files", rootIssues.filter(issue -> issue.path == "_polymod_icon.png" && issue.recommended == true).length == 1);
 		check("loads root file rules from JSON", ModStructure.fromJson('{"folders": ["data"], "requiredRootFiles": ["Pack.json"]}').requiredRootFiles[0] == "Pack.json");
+	}
+
+	static function png(width:Int, height:Int, colorType:Int = 6):Bytes
+	{
+		var output = new haxe.io.BytesOutput();
+		output.bigEndian = true;
+		for (b in [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+			output.writeByte(b);
+		output.writeInt32(13);
+		output.writeString("IHDR");
+		output.writeInt32(width);
+		output.writeInt32(height);
+		output.writeByte(8);
+		output.writeByte(colorType);
+		output.writeByte(0);
+		output.writeByte(0);
+		output.writeByte(0);
+		output.writeInt32(0);
+		output.writeInt32(0);
+		output.writeString("IEND");
+		output.writeInt32(0);
+		return output.getBytes();
+	}
+
+	static function testImages():Void
+	{
+		var root = '$OUT/image_mods';
+		mod('$root/base_img', "base_img");
+		sys.io.File.saveBytes(mkdirs('$root/base_img/images/characters/bf.png'), png(64, 32));
+		write('$root/base_img/images/characters/bf.xml', '<?xml version="1.0"?><TextureAtlas imagePath="bf.png">'
+			+ '<SubTexture name="BF idle0000" x="0" y="0" width="32" height="32"/>'
+			+ '<SubTexture name="BF idle0001" x="32" y="0" width="32" height="32" frameX="-2" frameY="-1" frameWidth="36" frameHeight="34"/>'
+			+ '<SubTexture name="BF NOTE LEFT0000" x="0" y="0" width="16" height="32" rotated="true"/></TextureAtlas>');
+		sys.io.File.saveBytes(mkdirs('$root/base_img/images/ui/logo.png'), png(100, 50));
+		mod('$root/zz_override', "zz_override", '"images": {"characters/gf": "characters/bf", "ui/title": "ui/logo"}');
+		sys.io.File.saveBytes(mkdirs('$root/zz_override/images/ui/logo.png'), png(200, 100, 2));
+		mod('$root/bad_img', "bad_img");
+		write('$root/bad_img/images/broken.png', "not a png");
+		sys.io.File.saveBytes(mkdirs('$root/bad_img/images/huge.png'), png(9000, 10));
+		sys.io.File.saveBytes(mkdirs('$root/bad_img/images/frames.png'), png(10, 10));
+		write('$root/bad_img/images/frames.xml', '<TextureAtlas><SubTexture name="a0000" x="5" y="5" width="10" height="10"/></TextureAtlas>');
+		write('$root/bad_img/images/orphan.xml', '<TextureAtlas></TextureAtlas>');
+
+		PolymodExtended.init({modRoot: root, framework: Framework.CUSTOM, customBackend: TestBackend});
+
+		check("later mods override images", ModImages.getSource("ui/logo") == "zz_override" && ModImages.getInfo("ui/logo").width == 200);
+		check("accepts paths with folder and extension", ModImages.resolve("images/characters/bf.png").modId == "base_img");
+		check("follows image aliases", ModImages.resolve("characters/gf").id == "characters/bf" && ModImages.getInfo("ui/title").width == 200);
+		check("reads PNG details", ModImages.getInfo("characters/bf").height == 32 && ModImages.getInfo("characters/bf").hasAlpha
+			&& !ModImages.getInfo("ui/logo").hasAlpha);
+		check("returns null for missing images", ModImages.resolve("nothing/here") == null && ModImages.getBytes("nothing") == null);
+
+		var atlas = ModImages.getAtlas("characters/bf");
+		check("loads the atlas next to the image", atlas != null && atlas.format == SPARROW && atlas.frames.length == 3);
+		check("reads frame offsets", atlas.getFrame("BF idle0001").frameX == -2 && atlas.getFrame("BF idle0001").frameWidth == 36);
+		check("groups animations", atlas.getAnimationNames().join(",") == "BF idle,BF NOTE LEFT" && atlas.getAnimationFrames("BF idle").length == 2);
+		check("finds atlases through aliases", ModImages.getAtlas("characters/gf") != null);
+
+		check("lists images", ModImages.list().contains("ui/logo") && ModImages.list("characters").join(",") == "characters/bf");
+		check("lists overridden images", ModImages.getOverrides().filter(o -> o.id == "ui/logo" && o.mods.join(",") == "base_img,zz_override").length == 1);
+
+		var issues = ModImages.validateMod("bad_img").map(issue -> issue.message).join("\n");
+		check("flags invalid images", issues.indexOf('"broken" is not a valid image') != -1);
+		check("flags oversized images", issues.indexOf("larger than the 8192px limit") != -1);
+		check("flags frames outside the image", issues.indexOf('outside the image, like "a0000"') != -1);
+		check("flags atlases without images", issues.indexOf('"orphan.xml" has no image') != -1);
+		check("clean mods have no image issues", ModImages.validateMod("base_img").length == 0);
+
+		PolymodExtended.setModEnabled("zz_override", false, true);
+		check("clears the cache on reload", ModImages.getSource("ui/logo") == "base_img" && ModImages.resolve("characters/gf") == null);
+
+		var packer = ImageAtlas.parse("arrow0 = 0 0 10 20\narrow1 = 10 0 10 20\n");
+		check("parses sprite sheet packer atlases", packer.format == PACKER && packer.frames[1].x == 10 && packer.getAnimationNames().join(",") == "arrow");
+		var json = ImageAtlas.parse('{"frames": {"a.png": {"frame": {"x": 1, "y": 2, "w": 3, "h": 4}, "rotated": false, "spriteSourceSize": {"x": 1, "y": 1}, "sourceSize": {"w": 5, "h": 6}}}, "meta": {"image": "a.png"}}');
+		check("parses TexturePacker JSON", json.format == JSON && json.frames[0].frameX == -1 && json.frames[0].frameHeight == 6 && json.imagePath == "a.png");
+		var arrayJson = ImageAtlas.parse('{"frames": [{"filename": "b", "frame": {"x": 0, "y": 0, "w": 8, "h": 8}}]}');
+		check("parses TexturePacker JSON arrays", arrayJson.frames[0].name == "b");
+		var spritemap = ImageAtlas.parse('{"ATLAS": {"SPRITES": [{"SPRITE": {"name": "0000", "x": 2, "y": 3, "w": 4, "h": 5, "rotated": true}}]}, "meta": {"image": "spritemap1.png"}}');
+		check("parses Animate spritemaps", spritemap.frames[0].rotated && spritemap.frames[0].height == 5 && spritemap.imagePath == "spritemap1.png");
+		check("rejects broken atlases", throws(() -> ImageAtlas.parse("<NotAtlas/>")) && throws(() -> ImageAtlas.parse("garbage line")));
+
+		var jpeg = Bytes.alloc(20);
+		for (i => b in [0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x01, 0x2C, 0x00, 0xC8])
+			jpeg.set(i, b);
+		var jpegInfo = ImageInfo.read(jpeg);
+		check("reads JPEG sizes", jpegInfo != null && jpegInfo.type == JPEG && jpegInfo.width == 200 && jpegInfo.height == 300);
+		check("detects powers of two", ImageInfo.isPowerOfTwo(512) && !ImageInfo.isPowerOfTwo(500));
+	}
+
+	static function testScripts():Void
+	{
+		var root = '$OUT/script_mods';
+		mod('$root/a_script_mod', "a_script_mod", '"settings": [{"id": "volume", "type": "int", "default": 7}]');
+		write('$root/a_script_mod/data/info.json', '{"name": "scripted"}');
+		write('$root/a_script_mod/scripts/main.hx', "
+			var counter = 0;
+			var greeting = 'hi from ' + mod.id;
+			function onCreate() { counter = 10; print('created', counter); }
+			function add(a, b) { counter += a + b; return counter; }
+			function onUpdate(elapsed) { counter += 1; }
+			function onNoteHit(note) { return note == 'bad' ? STOP : CONTINUE; }
+			function settingValue() { return mod.getSetting('volume'); }
+			function readInfo() { return mod.readJson('data/info.json').name; }
+			function onDestroy() { game.destroyed++; }
+			hook('songStart', function(event) { event.data.calls++; });
+		");
+		write('$root/a_script_mod/scripts/notes.txt', "not a script");
+		write('$root/a_script_mod/stages/stage1.hx', "function onBeat(beat) { return beat * 2; }");
+		mod('$root/b_script_mod', "b_script_mod");
+		write('$root/b_script_mod/scripts/other.hxs', "function add(a, b) { return -1; } function tryEscape() { return Type.resolveClass('Sys'); } function tryNew() { return new haxe.Http('x'); }");
+		write('$root/b_script_mod/scripts/broken.hx', "function oops( {");
+
+		var game = {destroyed: 0};
+		ScriptSandbox.expose("game", game);
+
+		var errors:Array<String> = [];
+		var prints:Array<String> = [];
+		ModScripts.onError.add(message -> errors.push(message.message));
+		ModScripts.onPrint.add(message -> prints.push(message.message));
+
+		PolymodExtended.init({modRoot: root, framework: Framework.CUSTOM, customBackend: TestBackend, scripts: true});
+
+		check("loads scripts from every mod", ModScripts.global.scripts.length == 2);
+		check("ignores files that are not scripts", ModScripts.global.scripts.filter(script -> script.name.indexOf("notes") != -1).length == 0);
+		check("reports syntax errors", errors.length == 1 && hasLogged(ModScripts.MOD_SCRIPT_ERROR));
+		check("runs onCreate", prints.join("|") == "created 10");
+
+		var main = ModScripts.global.scripts[0];
+		check("keeps top-level variables", main.get("greeting") == "hi from a_script_mod" && main.get("counter") == 10);
+		check("calls functions in every script", ModScripts.call("add", [1, 2]).join(",") == "13,-1");
+		check("functions update script variables", main.get("counter") == 13);
+		ModScripts.update(0.5);
+		check("calls onUpdate", main.get("counter") == 14);
+		check("supports STOP", ModScripts.callStop("onNoteHit", ["bad"]) && !ModScripts.callStop("onNoteHit", ["good"]));
+		check("gives scripts their mod settings", main.call("settingValue") == 7);
+		check("lets scripts read their mod files", main.call("readInfo") == "scripted");
+		check("lets scripts read exposed values", main.has("game"));
+
+		var data = {calls: 0};
+		polymod.extended.hooks.ModHooks.call("songStart", data);
+		check("registers hooks from scripts", data.calls == 1);
+
+		var other = ModScripts.global.scripts[1];
+		errors = [];
+		check("blocks unexposed classes", other.call("tryEscape") == null && errors.length == 1 && errors[0].indexOf("Type") != -1);
+		check("blocks creating unexposed classes", other.call("tryNew") == null && errors.length == 2 && errors[1].indexOf("not available") != -1);
+
+		var stage = ModScripts.load("stages/stage1.hx");
+		check("loads scripts on demand", stage.scripts.length == 1 && stage.call("onBeat", [4])[0] == 8);
+		check("on-demand scripts receive global calls", ModScripts.call("onBeat", [2]).contains(4));
+		ModScripts.destroyGroup(stage);
+		check("destroys script groups", !ModScripts.call("onBeat", [2]).contains(4));
+
+		ScriptSandbox.exposeClass(haxe.io.BytesBuffer);
+		var inlineScript = ModScripts.fromString("var buffer = new BytesBuffer(); buffer.addByte(65); function size() { return buffer.length; }", "inline");
+		check("creates exposed classes", inlineScript.active && inlineScript.call("size") == 1);
+		ScriptSandbox.hide("BytesBuffer");
+		check("hides classes again", !ScriptSandbox.classes.exists("haxe.io.BytesBuffer"));
+
+		PolymodExtended.reload();
+		check("destroys scripts on reload", game.destroyed == 1 && ModScripts.global.scripts.length == 2);
+		data.calls = 0;
+		polymod.extended.hooks.ModHooks.call("songStart", data);
+		check("does not duplicate hooks after reload", data.calls == 1);
+
+		PolymodExtended.unloadAll();
+		check("destroys scripts when unloading", game.destroyed == 2 && ModScripts.global.scripts.length == 0);
+		ScriptSandbox.hide("game");
+	}
+
+	static function mkdirs(path:String):String
+	{
+		var directory = haxe.io.Path.directory(path);
+
+		if (!sys.FileSystem.exists(directory))
+			sys.FileSystem.createDirectory(directory);
+
+		return path;
 	}
 
 	static function resolveWith(http:MockHttpClient, link:String, ?options:ResolveOptions):{?mod:ResolvedMod, ?error:String}

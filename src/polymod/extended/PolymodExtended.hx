@@ -22,7 +22,7 @@ typedef ModSettingChange =
 
 class PolymodExtended
 {
-	public static inline final VERSION:String = "0.5.0";
+	public static inline final VERSION:String = "0.6.0";
 
 	public static inline final DEFAULT_MOD_ROOT:String = "./mods";
 
@@ -380,6 +380,10 @@ class PolymodExtended
 		loadedMods = [];
 		polymod.extended.hooks.ModHooks.clearMods();
 		polymod.extended.app.ModAppSettings.refresh(loadedMods);
+
+		if (config.scripts == true)
+			polymod.extended.scripting.ModScripts.destroyAll();
+
 		onModsLoaded.dispatch(loadedMods);
 		polymod.extended.hooks.ModHooks.call(HOOK_MODS_LOADED, loadedMods, false);
 	}
@@ -417,6 +421,10 @@ class PolymodExtended
 		var result = first ? Polymod.init(buildParams(dirs)) : Polymod.loadOnlyModsByDir(dirs);
 		loadedMods = result != null ? result : [];
 		polymod.extended.app.ModAppSettings.refresh(loadedMods);
+
+		if (config.scripts == true)
+			polymod.extended.scripting.ModScripts.reload();
+
 		onModsLoaded.dispatch(loadedMods);
 		polymod.extended.hooks.ModHooks.call(HOOK_MODS_LOADED, loadedMods, false);
 	}

@@ -30,6 +30,8 @@ class ModOptions
 
 	public var app:Dynamic = null;
 
+	public var imageAliases:Map<String, String> = [];
+
 	public var folders:Array<{from:String, to:String}> = [];
 
 	public var settings:Array<ModSetting> = [];
@@ -205,6 +207,26 @@ class ModOptions
 			}
 			else
 				errors.push("\"settings\" must be an array");
+		}
+
+		var images:Dynamic = Reflect.field(json, "images");
+
+		if (images != null)
+		{
+			if (Type.typeof(images) == TObject)
+			{
+				for (from in Reflect.fields(images))
+				{
+					var to:Dynamic = Reflect.field(images, from);
+
+					if (Std.isOfType(to, String))
+						options.imageAliases.set(from, to);
+					else
+						errors.push('"images.$from" must be an image path string');
+				}
+			}
+			else
+				errors.push("\"images\" must be an object of image ids to image paths");
 		}
 
 		var app:Dynamic = Reflect.field(json, "app");

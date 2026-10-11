@@ -13,16 +13,18 @@
     "rar",
     "web",
     "desktop",
-    "gamebanana"
+    "gamebanana",
+    "hscript"
   ],
   "description": "An expanded modding framework built on top of Polymod",
-  "version": "0.5.0",
-  "releasenote": "Mods from links (GameBanana, GitHub, Drive, Dropbox, MediaFire), web download progress/cache/backups, app settings, hooks and multiple mod roots",
+  "version": "0.6.0",
+  "releasenote": "Image API (overrides, aliases, atlases, validation) and sandboxed HScript API for mods",
   "contributors": [
     "Brenninho123"
   ],
   "classPath": "src",
   "dependencies": {
-    "polymod": ""
+    "polymod": "",
+    "hscript": ""
   }
 }

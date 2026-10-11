@@ -14,14 +14,16 @@ polymod-extended keeps Polymod as the engine underneath and adds a management la
 - Mods from links: GameBanana, GitHub, Google Drive, Dropbox, MediaFire and direct URLs, with update checks
 - Mods that change the game: allowed app settings (title, icon, FPS, window) and an event hook system for scripts
 - Several mod folders at once and the right default mods folder for each platform
+- An image API (overrides by load order, aliases, Sparrow/Packer/JSON/Animate atlases, validation) and an HScript API (per-mod scripts in a sandbox)
 - One-call reloading, a central error log and signals your game can listen to
 
 ## Installation
 
-polymod-extended targets Polymod 2.0, which is currently only available from git.
+polymod-extended targets Polymod 2.0, which is currently only available from git, and uses [hscript](https://github.com/HaxeFoundation/hscript) for mod scripts.
 
 ```bash
 haxelib git polymod https://github.com/larsiusprime/polymod
+haxelib install hscript
 haxelib git polymod-extended https://github.com/BrenninhoTools/polymod-extended
 ```
 
@@ -393,6 +395,117 @@ var result = ModOrganizer.organizeMod("messy_mod");
 
 It sends images to `images`, audio to `sounds` (and `Inst`/`Voices` files to `songs`), fonts, videos, scripts and shaders to their folders, and loose JSON, XML and text files to `data`, except atlas files that sit next to an image with the same name, which go with the image. An extra `assets/` folder around the content is removed. Existing files are never overwritten: those moves are listed in `skipped`. Folders left empty are deleted. `planMod` and `planFolder` only report, nothing is moved until `organizeMod`, `organizeFolder` or `apply` runs. Archive mods have to be extracted first.
 
+## Images
+
+`ModImages` finds images in the loaded mods. When several mods have the same image, the one loaded last wins, the same rule Polymod uses for every asset.
+
+```haxe
+import polymod.extended.images.ModImages;
+
+if (ModImages.exists("characters/BOYFRIEND"))
+{
+	var frames = ModImages.getFrames("characters/BOYFRIEND");
+	var from = ModImages.getSource("characters/BOYFRIEND");
+}
+```
+
+Ids are paths inside each mod's `images` folder, with or without `images/` and the extension (`.png`, `.jpg`, `.jpeg`).
+
+| Function | Description |
+| --- | --- |
+| `resolve(id)` / `exists(id)` / `getSource(id)` | Which mod provides the image and where the file is |
+| `getBytes(id)` / `getInfo(id)` | File bytes, and size, type and transparency read from the header without decoding |
+| `getAtlas(id)` / `getAtlasText(id)` | The atlas next to the image (`.xml` Sparrow, `.txt` sprite sheet packer, `.json` TexturePacker hash/array or Adobe Animate spritemap), parsed into frames with offsets, rotation, `getAnimationNames()` and `getAnimationFrames(prefix)` |
+| `getImage(id)` | `lime.graphics.Image` (Lime) |
+| `getBitmapData(id, cache)` | `openfl.display.BitmapData`, cached until the next reload (OpenFL) |
+| `getFrames(id)` | `FlxAtlasFrames` built from the image and its atlas (HaxeFlixel) |
+| `list(?subfolder)` / `listMod(mod, ?subfolder)` | Image ids from all loaded mods or from one |
+| `getOverrides()` | Images provided by more than one mod, and by which ones |
+| `validateMod(modId)` | Files that are not real images, images larger than `maxTextureSize` (8192), atlas frames outside their image, broken atlases and atlases without an image |
+| `clearCache()` | Runs automatically after every reload |
+
+The atlas is taken from the same mod as the image when it has one, so a mod that only replaces a PNG keeps working with the original atlas. Mods can also redirect images in their metadata:
+
+```json
+{
+  "images": { "characters/GF": "characters/GF-christmas", "menu/logo": "menu/logo-remix" }
+}
+```
+
+`ImageAtlas.parse(text)` and `ImageInfo.read(bytes)` work on their own too, on every target.
+
+## Scripts
+
+`ModScripts` runs HScript files from the loaded mods. Turn it on with `scripts: true`:
+
+```haxe
+import polymod.extended.scripting.ModScripts;
+import polymod.extended.scripting.ScriptSandbox;
+
+ScriptSandbox.expose("FlxG", flixel.FlxG);
+ScriptSandbox.exposeClass(flixel.FlxSprite);
+
+PolymodExtended.init({scripts: true});
+
+override function update(elapsed:Float)
+{
+	super.update(elapsed);
+	ModScripts.update(elapsed);
+}
+
+function goodNoteHit(note:Note)
+{
+	if (ModScripts.callStop("onNoteHit", [note]))
+		return;
+}
+```
+
+Every `.hx`, `.hxs` or `.hscript` file directly inside a mod's `scripts` folder is loaded after the mods load, in load order, and `onCreate` is called. On every reload or unload the scripts get `onDestroy` and are thrown away.
+
+```haxe
+var hits = 0;
+
+function onCreate()
+{
+	print("Loaded " + mod.title + " with volume " + mod.getSetting("volume"));
+}
+
+function onNoteHit(note)
+{
+	hits++;
+	return note.isBad ? STOP : CONTINUE;
+}
+
+hook("songStart", function(event) {
+	var song = mod.readJson("data/intro.json");
+});
+```
+
+| Script global | Description |
+| --- | --- |
+| `mod` | `id`, `title`, `version`, `path`, `getSetting(key)`, `setSetting(key, value)`, `getData()`, `exists(file)`, `readText(file)`, `readJson(file)` (files inside the mod only) |
+| `script` | `name`, `path` and `modId` of the current script |
+| `print(...)` | Logs through `ModScripts.onPrint` and the error log |
+| `hook(name, callback, ?priority)` | Adds a `ModHooks` listener that is removed with the script |
+| `callScripts(name, ?args)` | Calls a function in every loaded script |
+| `STOP` / `CONTINUE` | Return values for `callStop` |
+| `Math`, `Std`, `StringTools`, `Lambda`, `Date`, `DateTools`, `Json`, `StringBuf`, `EReg`, `ModHooks`, `ModEvent` | Available by default |
+
+| Function | Description |
+| --- | --- |
+| `call(name, ?args)` | Calls a function in every script, returns the results |
+| `callStop(name, ?args)` | Returns `true` as soon as a script returns `STOP` |
+| `set(name, value)` | Sets a variable in every script |
+| `update(elapsed)` | Calls `onUpdate` |
+| `load(path)` / `loadFolder(folder)` | Loads scripts on demand from every mod that has them (for example `stages/week1.hx`), as a `ScriptGroup` with `call`, `callStop`, `set` and `destroy` |
+| `destroyGroup(group)` / `destroyAll()` | Unloads scripts |
+| `fromString(code, name)` | Runs a script from a string |
+| `onError` / `onPrint` | Signals |
+
+Scripts run in a sandbox: they only see the globals above and what the game exposes with `ScriptSandbox.expose(name, value)` or `exposeClass(cls, ?alias)`, and `new` only works for exposed classes. `Type`, `Reflect`, `Sys` and file access are not available unless the game exposes them. Errors (including syntax errors, with line numbers when compiled with `-D hscriptPos`) are caught, logged and sent to `onError`, and a broken script never stops the others. Variables declared at the top of a script keep their values between calls. Scripts cannot be stopped in the middle of an infinite loop, so the game should still only load mods the player chose.
+
+These scripts are separate from Polymod's scripted classes (`.hxc`), which keep working with `useScriptedClasses: true`.
+
 ## Mod options
 
 polymod-extended reads extra fields from each mod's `_polymod_meta.json`. Every field is optional.
@@ -438,6 +551,7 @@ polymod-extended reads extra fields from each mod's `_polymod_meta.json`. Every 
 | `tags` | Free-form tags for filtering with `getModsByTag()`. |
 | `category` | Category name for mods that are not inside a category folder. |
 | `app` | App settings the mod wants to change, see App settings. |
+| `images` | Image redirects, see Images. |
 | `layout` | Folder layout the mod was made for (`psych`, `vslice`, `codename` or a registered one). |
 | `folders` | Extra folder mappings for this mod, see Folder mapping. |
 | `data` | Any JSON value, available through `getModData(id)` for your engine to use. |
@@ -499,6 +613,7 @@ Accepts the usual Polymod options (`framework`, `frameworkParams`, `customBacken
 | `detectLayouts` | `true` | Detect each mod's layout from its files |
 | `layoutMappings` | none | Custom mappings per mod layout, replacing the built-in ones |
 | `allowAppSettings` | `false` | Let mods change the default app settings |
+| `scripts` | `false` | Load HScript files from each mod's `scripts` folder |
 | `skipDependencyErrors` | `true` | Skip only the mods with missing dependencies |
 | `maxLogEntries` | `256` | Size limit of the error log, `0` for unlimited |
 
