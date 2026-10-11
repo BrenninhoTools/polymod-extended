@@ -1,0 +1,9 @@
+{
+  "id": "base_mod",
+  "title": "Base Mod",
+  "description": "A sample mod used by the test suite",
+  "author": "BrenninhoTools",
+  "api_version": "0.1.0",
+  "mod_version": "1.0.0",
+  "license": "MIT"
+}

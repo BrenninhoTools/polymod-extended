@@ -1,0 +1,7 @@
+-cp src
+-cp ../src
+-lib lime
+-lib polymod
+-D POLYMOD_EXTENDED
+-main Main
+--interp

@@ -1,3 +1,10 @@
 .haxelib/
 .haxelsp/recording/
 dump/
+export/
+bin/
+*.hl
+*.n
+.vscode/
+.DS_Store
+Thumbs.db

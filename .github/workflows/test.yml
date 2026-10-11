@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Haxe
+        uses: krdlab/setup-haxe@v1
+        with:
+          haxe-version: 4.3.7
+
+      - name: Install dependencies
+        run: |
+          haxelib setup ~/haxelib
+          haxelib install lime --quiet
+          haxelib install thx.core --quiet
+          haxelib install thx.semver --quiet
+          haxelib git jsonpath https://github.com/EliteMasterEric/jsonpath --quiet
+          haxelib git jsonpatch https://github.com/EliteMasterEric/jsonpatch --quiet
+          haxelib git polymod https://github.com/larsiusprime/polymod --quiet
+          haxelib dev polymod-extended .
+
+      - name: Run tests
+        working-directory: test
+        run: haxe test.hxml

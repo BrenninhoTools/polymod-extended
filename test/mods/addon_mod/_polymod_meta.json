@@ -1,0 +1,12 @@
+{
+  "id": "addon_mod",
+  "title": "Addon Mod",
+  "description": "A sample mod that depends on base_mod",
+  "author": "BrenninhoTools",
+  "api_version": "0.1.0",
+  "mod_version": "1.0.0",
+  "license": "MIT",
+  "dependencies": {
+    "base_mod": "1.0.0"
+  }
+}
