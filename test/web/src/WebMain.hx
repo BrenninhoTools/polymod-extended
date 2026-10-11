@@ -39,7 +39,8 @@ class WebMain
 			modRoot: "mods",
 			framework: Framework.CUSTOM,
 			customBackend: TestBackend,
-			modListFile: "web_modlist.json"
+			modListFile: "web_modlist.json",
+			gameLayout: "vslice"
 		});
 
 		check("uses the virtual file system", Std.isOfType(PolymodExtended.fileSystem, VirtualFileSystem));
@@ -57,6 +58,21 @@ class WebMain
 		fs.removeFolderMod("loose_mod");
 		PolymodExtended.reload();
 		check("removes loose mods", !PolymodExtended.isModLoaded("loose_mod"));
+
+		fs.addFolderMod("songs/web_pack", [
+			"_polymod_meta.json" => Bytes.ofString('{"id": "web_pack", "title": "Web Pack", "api_version": "0.1.0", "mod_version": "1.0.0"}')
+		]);
+		fs.addFolderMod("psych_web", [
+			"_polymod_meta.json" => Bytes.ofString('{"id": "psych_web", "title": "Psych Web", "api_version": "0.1.0", "mod_version": "1.0.0"}'),
+			"pack.json" => Bytes.ofString("{}"),
+			"characters/gf.json" => Bytes.ofString('{"name": "gf"}')
+		]);
+		PolymodExtended.reload();
+		check("loads mods from category folders", PolymodExtended.isModLoaded("web_pack")
+			&& PolymodExtended.getModCategory("web_pack") != null && PolymodExtended.getModCategory("web_pack").id == "songs");
+		check("maps folders on the web", PolymodExtended.getModLayout("psych_web") == "psych"
+			&& fs.getFileContent("mods/psych_web/data/characters/gf.json") == '{"name": "gf"}');
+		check("lists mapped files on the web", fs.readDirectoryRecursive("mods/psych_web").contains("data/characters/gf.json"));
 
 		check("parses mod indexes", WebMods.parseIndex('["a.zip", {"url": "b/c.rar", "name": "c"}]', "https://example.com/mods/index.json")
 			.map(entry -> entry.url).join(",") == "https://example.com/mods/a.zip,https://example.com/mods/b/c.rar");

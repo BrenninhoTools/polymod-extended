@@ -24,6 +24,12 @@ class ModOptions
 
 	public var tags:Array<String> = [];
 
+	public var category:Null<String> = null;
+
+	public var layout:Null<String> = null;
+
+	public var folders:Array<{from:String, to:String}> = [];
+
 	public var settings:Array<ModSetting> = [];
 
 	public var data:Dynamic = null;
@@ -131,6 +137,46 @@ class ModOptions
 				options.gameVersion = gameVersion;
 			else
 				errors.push("\"gameVersion\" must be a version rule string");
+		}
+
+		var category:Dynamic = Reflect.field(json, "category");
+
+		if (category != null)
+		{
+			if (Std.isOfType(category, String) && StringTools.trim(category).length > 0)
+				options.category = StringTools.trim(category);
+			else
+				errors.push("\"category\" must be a non-empty string");
+		}
+
+		var layout:Dynamic = Reflect.field(json, "layout");
+
+		if (layout != null)
+		{
+			if (Std.isOfType(layout, String))
+				options.layout = layout;
+			else
+				errors.push("\"layout\" must be a string");
+		}
+
+		var folders:Dynamic = Reflect.field(json, "folders");
+
+		if (folders != null)
+		{
+			if (Type.typeof(folders) == TObject)
+			{
+				for (from in Reflect.fields(folders))
+				{
+					var to:Dynamic = Reflect.field(folders, from);
+
+					if (Std.isOfType(to, String))
+						options.folders.push({from: from, to: to});
+					else
+						errors.push('"folders.$from" must be a folder path string');
+				}
+			}
+			else
+				errors.push("\"folders\" must be an object of mod folders to game folders");
 		}
 
 		options.enabledByDefault = readBool(json, "enabledByDefault", true, errors);

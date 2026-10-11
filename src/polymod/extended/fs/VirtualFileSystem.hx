@@ -5,13 +5,16 @@ import haxe.io.Path;
 import polymod.Polymod;
 import polymod.PolymodConfig;
 import polymod.extended.archive.Archive;
+import polymod.extended.structure.FolderMapper;
 import polymod.fs.MemoryFileSystem;
 import polymod.fs.PolymodFileSystem.PolymodFileSystemParams;
 import polymod.util.Util;
 
-class VirtualFileSystem extends MemoryFileSystem
+class VirtualFileSystem extends MemoryFileSystem implements IFolderMapping
 {
 	public var archives(default, null):ArchiveMounts;
+
+	public var mapper(default, null):FolderMapper = new FolderMapper();
 
 	public var root(get, never):String;
 
@@ -82,13 +85,79 @@ class VirtualFileSystem extends MemoryFileSystem
 
 	override public function exists(path:String):Bool
 	{
-		if (archives.hasFile(path) || archives.hasDirectory(path))
-			return true;
-
-		return super.exists(ArchiveMounts.normalize(path));
+		return rawExists(path) || (mapper.hasMappings() && (mapper.resolve(path, rawExists) != null || mapper.isDirectory(path, rawIsDirectory, rawReadDirectory)));
 	}
 
 	override public function isDirectory(path:String):Bool
+	{
+		if (rawIsDirectory(path))
+			return true;
+
+		if (!mapper.hasMappings() || rawExists(path))
+			return false;
+
+		var resolved = mapper.resolve(path, rawExists);
+		return resolved != null ? rawIsDirectory(resolved) : mapper.isDirectory(path, rawIsDirectory, rawReadDirectory);
+	}
+
+	override public function readDirectory(path:String):Array<String>
+	{
+		var result = rawReadDirectory(path);
+
+		if (mapper.hasMappings())
+			for (child in mapper.children(path, rawIsDirectory, rawReadDirectory))
+				if (!result.contains(child))
+					result.push(child);
+
+		return result;
+	}
+
+	override public function readDirectoryRecursive(path:String):Array<String>
+	{
+		var result:Array<String> = [];
+		collect(ArchiveMounts.normalize(path), "", result);
+		return result;
+	}
+
+	override public function getFileBytes(path:String):Bytes
+	{
+		if (!rawExists(path) && mapper.hasMappings())
+		{
+			var resolved = mapper.resolve(path, rawExists);
+
+			if (resolved != null)
+				return rawGetFileBytes(resolved);
+		}
+
+		return rawGetFileBytes(path);
+	}
+
+	override public function getFileContent(path:String):Null<String>
+	{
+		var bytes = getFileBytes(path);
+		return bytes != null ? bytes.toString() : null;
+	}
+
+	function collect(directory:String, relative:String, result:Array<String>):Void
+	{
+		for (name in readDirectory(directory))
+		{
+			var full = ArchiveMounts.join(directory, name);
+			var child = relative.length > 0 ? relative + "/" + name : name;
+
+			if (isDirectory(full))
+				collect(full, child, result);
+			else if (!result.contains(child))
+				result.push(child);
+		}
+	}
+
+	function rawExists(path:String):Bool
+	{
+		return archives.hasFile(path) || archives.hasDirectory(path) || super.exists(ArchiveMounts.normalize(path));
+	}
+
+	function rawIsDirectory(path:String):Bool
 	{
 		if (archives.hasDirectory(path))
 			return true;
@@ -99,7 +168,7 @@ class VirtualFileSystem extends MemoryFileSystem
 		return super.isDirectory(ArchiveMounts.normalize(path));
 	}
 
-	override public function readDirectory(path:String):Array<String>
+	function rawReadDirectory(path:String):Array<String>
 	{
 		var key = ArchiveMounts.normalize(path);
 		var result = super.readDirectory(key);
@@ -113,30 +182,12 @@ class VirtualFileSystem extends MemoryFileSystem
 		return result;
 	}
 
-	override public function readDirectoryRecursive(path:String):Array<String>
-	{
-		var key = ArchiveMounts.normalize(path);
-		var result = super.readDirectoryRecursive(key).filter(file -> file.length > 0);
-
-		for (file in archives.listFiles(key))
-			if (!result.contains(file))
-				result.push(file);
-
-		return result;
-	}
-
-	override public function getFileBytes(path:String):Bytes
+	function rawGetFileBytes(path:String):Bytes
 	{
 		if (archives.hasFile(path))
 			return archives.readBytes(path);
 
 		return super.getFileBytes(ArchiveMounts.normalize(path));
-	}
-
-	override public function getFileContent(path:String):Null<String>
-	{
-		var bytes = getFileBytes(path);
-		return bytes != null ? bytes.toString() : null;
 	}
 
 	override public function getMetadataById(modId:String, ?origin:PolymodErrorOrigin):Null<ModMetadata>

@@ -4,12 +4,14 @@ package polymod.extended.fs;
 import haxe.io.Bytes;
 import haxe.io.Path;
 import polymod.Polymod;
+import polymod.PolymodConfig;
 import polymod.extended.archive.Archive;
 import polymod.extended.archive.ArchiveFormats;
 import polymod.fs.PolymodFileSystem.PolymodFileSystemParams;
+import polymod.extended.structure.FolderMapper;
 import polymod.fs.SysFileSystem;
 
-class ArchiveFileSystem extends SysFileSystem
+class ArchiveFileSystem extends SysFileSystem implements IFolderMapping
 {
 	public static inline final ARCHIVE_OPEN_FAILED:PolymodErrorCode = ArchiveMounts.ARCHIVE_OPEN_FAILED;
 	public static inline final ARCHIVE_UNSUPPORTED:PolymodErrorCode = ArchiveMounts.ARCHIVE_UNSUPPORTED;
@@ -20,6 +22,8 @@ class ArchiveFileSystem extends SysFileSystem
 	public var archives(default, null):ArchiveMounts;
 
 	public var mounts(get, never):Map<String, Archive>;
+
+	public var mapper(default, null):FolderMapper = new FolderMapper();
 
 	var archiveFiles:Map<String, String> = [];
 
@@ -43,8 +47,27 @@ class ArchiveFileSystem extends SysFileSystem
 		{
 			var path = Path.join([modRoot, name]);
 
-			if (!sys.FileSystem.isDirectory(path) && ArchiveFormats.isArchivePath(name))
-				mountFile(path);
+			if (!sys.FileSystem.isDirectory(path))
+			{
+				if (ArchiveFormats.isArchivePath(name))
+					mountFile(path);
+
+				continue;
+			}
+
+			if (sys.FileSystem.exists(Path.join([path, PolymodConfig.modMetadataFile])))
+				continue;
+
+			var children = sys.FileSystem.readDirectory(path);
+			children.sort((a, b) -> a < b ? -1 : (a > b ? 1 : 0));
+
+			for (child in children)
+			{
+				var childPath = Path.join([path, child]);
+
+				if (!sys.FileSystem.isDirectory(childPath) && ArchiveFormats.isArchivePath(child))
+					mountFile(childPath, name + "/" + ArchiveMounts.defaultDirName(child));
+			}
 		}
 
 		archives.restoreMemoryArchives();
@@ -53,6 +76,10 @@ class ArchiveFileSystem extends SysFileSystem
 	public function mountFile(path:String, ?dirName:String):Bool
 	{
 		var name = Path.withoutDirectory(path);
+		var key = relativeToRoot(path);
+
+		if (key == null)
+			key = name;
 
 		if (dirName == null)
 			dirName = ArchiveMounts.defaultDirName(name);
@@ -72,7 +99,7 @@ class ArchiveFileSystem extends SysFileSystem
 		if (!archives.mount(archive, dirName))
 			return false;
 
-		archiveFiles.set(name, dirName);
+		archiveFiles.set(key, dirName);
 		return true;
 	}
 
@@ -116,13 +143,67 @@ class ArchiveFileSystem extends SysFileSystem
 
 	override public function exists(path:String):Bool
 	{
-		if (archives.hasFile(path) || archives.hasDirectory(path))
-			return true;
-
-		return super.exists(path);
+		return rawExists(path) || (mapper.hasMappings() && (mapper.resolve(path, rawExists) != null || mappedDirectory(path)));
 	}
 
 	override public function isDirectory(path:String):Bool
+	{
+		if (rawIsDirectory(path))
+			return true;
+
+		if (!mapper.hasMappings() || rawExists(path))
+			return false;
+
+		var resolved = mapper.resolve(path, rawExists);
+		return resolved != null ? rawIsDirectory(resolved) : mappedDirectory(path);
+	}
+
+	override public function readDirectory(path:String):Array<String>
+	{
+		var result = rawIsDirectory(path) ? rawReadDirectory(path) : [];
+
+		if (mapper.hasMappings())
+		{
+			for (child in mapper.children(path, rawIsDirectory, rawReadDirectory))
+				if (!result.contains(child))
+					result.push(child);
+		}
+		else if (result.length == 0 && !rawIsDirectory(path))
+			return rawReadDirectory(path);
+
+		return result;
+	}
+
+	override public function getFileBytes(path:String):Bytes
+	{
+		if (!rawExists(path) && mapper.hasMappings())
+		{
+			var resolved = mapper.resolve(path, rawExists);
+
+			if (resolved != null)
+				return rawGetFileBytes(resolved);
+		}
+
+		return rawGetFileBytes(path);
+	}
+
+	override public function getFileContent(path:String):String
+	{
+		var bytes = getFileBytes(path);
+		return bytes != null ? bytes.toString() : null;
+	}
+
+	function mappedDirectory(path:String):Bool
+	{
+		return mapper.isDirectory(path, rawIsDirectory, rawReadDirectory);
+	}
+
+	function rawExists(path:String):Bool
+	{
+		return archives.hasFile(path) || archives.hasDirectory(path) || super.exists(path);
+	}
+
+	function rawIsDirectory(path:String):Bool
 	{
 		if (archives.hasDirectory(path))
 			return true;
@@ -133,7 +214,7 @@ class ArchiveFileSystem extends SysFileSystem
 		return super.exists(path) && super.isDirectory(path);
 	}
 
-	override public function readDirectory(path:String):Array<String>
+	function rawReadDirectory(path:String):Array<String>
 	{
 		var mounted = archives.readDirectory(path);
 		var real = super.exists(path) && super.isDirectory(path);
@@ -142,9 +223,10 @@ class ArchiveFileSystem extends SysFileSystem
 			return super.readDirectory(path);
 
 		var result = real ? super.readDirectory(path) : [];
+		var relative = relativeToRoot(path);
 
-		if (ArchiveMounts.normalize(path) == archives.root)
-			result = result.filter(name -> !archiveFiles.exists(name));
+		if (relative != null)
+			result = result.filter(name -> !archiveFiles.exists(relative.length > 0 ? relative + "/" + name : name));
 
 		for (child in mounted)
 			if (!result.contains(child))
@@ -153,7 +235,7 @@ class ArchiveFileSystem extends SysFileSystem
 		return result;
 	}
 
-	override public function getFileBytes(path:String):Bytes
+	function rawGetFileBytes(path:String):Bytes
 	{
 		if (archives.hasFile(path))
 			return archives.readBytes(path);
@@ -161,10 +243,18 @@ class ArchiveFileSystem extends SysFileSystem
 		return super.getFileBytes(path);
 	}
 
-	override public function getFileContent(path:String):String
+	function relativeToRoot(path:String):Null<String>
 	{
-		var bytes = getFileBytes(path);
-		return bytes != null ? bytes.toString() : null;
+		var key = ArchiveMounts.normalize(path);
+		var root = archives.root;
+
+		if (key == root)
+			return "";
+
+		if (root.length == 0)
+			return key;
+
+		return StringTools.startsWith(key, root + "/") ? key.substr(root.length + 1) : null;
 	}
 
 	function realFolderExists(path:String):Bool

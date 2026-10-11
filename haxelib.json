@@ -15,8 +15,8 @@
     "desktop"
   ],
   "description": "An expanded modding framework built on top of Polymod",
-  "version": "0.3.0",
-  "releasenote": "Web modding API (URLs, uploads, IndexedDB) and desktop modding API (install, export, watcher)",
+  "version": "0.4.0",
+  "releasenote": "Folder organization: categories, mod structure validation, folder mapping between engines and auto-organize",
   "contributors": [
     "Brenninho123"
   ],

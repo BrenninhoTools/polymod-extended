@@ -90,7 +90,7 @@ class ArchiveMounts
 	{
 		var modDir = Archive.normalizePath(dirName);
 
-		if (modDir == null || modDir.length == 0 || modDir.indexOf("/") != -1)
+		if (modDir == null || modDir.length == 0 || modDir.split("/").length > 2)
 		{
 			Polymod.error(ARCHIVE_CONFLICT, 'Invalid mod folder name "$dirName" for "${archive.name}"', SCAN);
 			archive.close();
@@ -175,10 +175,25 @@ class ArchiveMounts
 				lowerDirectories.remove(key.toLowerCase());
 			}
 
-		var rootChildren = directories.get(root);
+		var current = base;
 
-		if (rootChildren != null)
-			rootChildren.remove(dirName);
+		while (current != root && current.length > root.length)
+		{
+			var parent = parentOf(current);
+			var siblings = directories.get(parent);
+
+			if (siblings == null)
+				break;
+
+			siblings.remove(current.substr(parent.length + (parent.length > 0 ? 1 : 0)));
+
+			if (siblings.length > 0 || parent == root)
+				break;
+
+			directories.remove(parent);
+			lowerDirectories.remove(parent.toLowerCase());
+			current = parent;
+		}
 
 		mounts.remove(dirName);
 		archive.close();

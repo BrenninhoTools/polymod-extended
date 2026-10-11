@@ -5,6 +5,8 @@ import polymod.Polymod.FrameworkParams;
 import polymod.backends.IBackend;
 import polymod.backends.PolymodAssets.PolymodAssetType;
 import polymod.format.ParseRules;
+import polymod.extended.structure.FolderMapper.FolderMapping;
+import polymod.extended.structure.ModStructure;
 import thx.semver.VersionRule;
 
 typedef ExtendedConfig =
@@ -18,6 +20,11 @@ typedef ExtendedConfig =
 	?enableNewMods:Bool,
 	?archives:Bool,
 	?gameVersion:String,
+	?structure:ModStructure,
+	?validateStructure:Bool,
+	?gameLayout:String,
+	?detectLayouts:Bool,
+	?layoutMappings:Map<String, Array<FolderMapping>>,
 	?framework:Framework,
 	?frameworkParams:FrameworkParams,
 	?customBackend:Class<IBackend>,

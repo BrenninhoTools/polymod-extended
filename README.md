@@ -10,6 +10,7 @@ polymod-extended keeps Polymod as the engine underneath and adds a management la
 - Automatic saving of the mod list and mod settings
 - A web API for HTML5 builds: mods from URLs, uploads, drag and drop, and mods kept in the browser
 - A desktop API: install, uninstall, export and create mods, open the mods folder and reload when files change
+- Folder organization: categories as subfolders, a standard mod structure with validation, folder mapping between engines (Psych, V-Slice, Codename) and automatic file organizing
 - One-call reloading, a central error log and signals your game can listen to
 
 ## Installation
@@ -162,6 +163,108 @@ override function update(elapsed:Float)
 
 Installing checks the archive before copying it: unreadable RARs, archives without `_polymod_meta.json` and mods whose id is already installed are refused with a clear `error` message. The watcher ignores the saved mod list and settings files, so saving does not trigger a reload.
 
+## Folder organization
+
+### Categories
+
+Mods can be grouped in subfolders of the mods folder. Any folder without `_polymod_meta.json` is a category, and the mod folders and archives inside it are loaded like any other mod:
+
+```
+mods/
+  my_mod/
+  songs/
+    _category.json
+    week_pack/
+    remixes.zip
+  skins/
+    pixel_bf/
+```
+
+`_category.json` is optional: `{"title": "Song Packs", "description": "...", "order": 1, "hidden": false, "data": {}}`. A mod can also declare `"category": "Skins"` in its metadata to join a category without moving folders (the folder wins when both exist). Categories go one level deep.
+
+```haxe
+for (category in PolymodExtended.categories)
+	addMenuSection(category.title, PolymodExtended.getModsInCategory(category.id));
+```
+
+| Member | Description |
+| --- | --- |
+| `categories` | All categories, sorted by `order` and title |
+| `getCategory(id)` / `getModCategory(modId)` | Lookups |
+| `getModsInCategory(id)` / `getUncategorizedMods()` | Mods per category |
+| `DesktopMods.createCategory(name, ?title, ?description, ?order)` | Creates a category folder with `_category.json` |
+| `DesktopMods.moveModToCategory(id, category)` | Moves a mod folder or archive, `null` moves it back to the root |
+| `installMod(path, {category: "songs"})` / `createMod(id, {category: "songs"})` | Install or create straight into a category |
+
+Two mods with the same id are not loaded twice: the first one found wins (root folder before categories) and a warning is logged.
+
+### Mod structure and validation
+
+Give the config a `ModStructure` to define which folders a mod may have and which file types go in each one:
+
+```haxe
+import polymod.extended.structure.StructurePresets;
+
+PolymodExtended.init({structure: StructurePresets.vslice()});
+
+for (issue in PolymodExtended.getStructureIssues("my_mod"))
+	showIssue(issue.message, issue.suggestion);
+```
+
+Presets: `generic()`, `psych()`, `vslice()` and `codename()`. They are starting points based on each engine's usual folders, so adjust them to your engine. A structure can also be loaded with `ModStructure.fromJson`:
+
+```json
+{
+  "name": "my-engine",
+  "folders": [
+    { "path": "data", "extensions": ["json", "xml"], "required": true },
+    { "path": "images", "extensions": ["png", "xml"], "template": true },
+    "scripts"
+  ],
+  "rootFiles": ["_polymod_meta.json", "_polymod_icon.png", "*.md"],
+  "allowUnknownFolders": false
+}
+```
+
+Validation runs on every scan and reports loose files in the mod root, unknown folders, files with the wrong extension for their folder and missing required folders, each with a suggested location. Issues are logged as warnings and never stop a mod from loading. `createMod` uses the structure's template folders. Set `validateStructure: false` to keep the structure for organizing only.
+
+### Folder mapping between engines
+
+A mod made for one engine's folder layout can be read with your game's layout without moving any file. Set `gameLayout` in the config and each mod's layout is detected from its files, or declared with `"layout": "psych"`:
+
+```haxe
+PolymodExtended.init({gameLayout: "vslice"});
+```
+
+With that, a Psych mod's `characters/bf.json` can also be read as `data/characters/bf.json`, `weeks/` as `data/levels/`, and a Codename mod's `songs/bopeebo/song/Inst.ogg` as `songs/bopeebo/Inst.ogg`. The original paths keep working.
+
+Built-in layouts are `psych`, `vslice` and `codename`, covering characters, stages, weeks and song audio. Register your own with `FolderLayouts.register(name, [concept => folder])`, override a pair with `layoutMappings`, or map folders per mod:
+
+```json
+{
+  "folders": { "art": "images", "songs/*/audio": "songs/*" }
+}
+```
+
+`*` matches one folder name and must appear the same number of times on both sides. Mapping only changes where files are found: JSON, XML and chart formats are not converted between engines. `getModLayout(id)` and `getFolderMappings(id)` show what was applied. Detection can be turned off with `detectLayouts: false`.
+
+### Auto-organize
+
+`ModOrganizer` (native targets) moves misplaced files of a folder mod to the folder its structure suggests:
+
+```haxe
+import polymod.extended.desktop.ModOrganizer;
+
+var plan = ModOrganizer.planMod("messy_mod");
+
+for (move in plan.moves)
+	showPlannedMove(move.from, move.to);
+
+var result = ModOrganizer.organizeMod("messy_mod");
+```
+
+It sends images to `images`, audio to `sounds` (and `Inst`/`Voices` files to `songs`), fonts, videos, scripts and shaders to their folders, and loose JSON, XML and text files to `data`, except atlas files that sit next to an image with the same name, which go with the image. An extra `assets/` folder around the content is removed. Existing files are never overwritten: those moves are listed in `skipped`. Folders left empty are deleted. `planMod` and `planFolder` only report, nothing is moved until `organizeMod`, `organizeFolder` or `apply` runs. Archive mods have to be extracted first.
+
 ## Mod options
 
 polymod-extended reads extra fields from each mod's `_polymod_meta.json`. Every field is optional.
@@ -205,6 +308,9 @@ polymod-extended reads extra fields from each mod's `_polymod_meta.json`. Every 
 | `enabledByDefault` | Whether the mod starts enabled the first time it is found. |
 | `hidden` | Hides the mod from `getVisibleMods()`, for library mods players should not toggle. |
 | `tags` | Free-form tags for filtering with `getModsByTag()`. |
+| `category` | Category name for mods that are not inside a category folder. |
+| `layout` | Folder layout the mod was made for (`psych`, `vslice`, `codename` or a registered one). |
+| `folders` | Extra folder mappings for this mod, see Folder mapping. |
 | `data` | Any JSON value, available through `getModData(id)` for your engine to use. |
 | `settings` | User-editable options. Types: `bool`, `int`, `float`, `string`, `choice`. Values are validated and clamped. |
 
@@ -257,6 +363,11 @@ Accepts the usual Polymod options (`framework`, `frameworkParams`, `customBacken
 | `enableNewMods` | `true` | Whether mods found for the first time start enabled |
 | `archives` | `true` | Load `.zip` and `.rar` mods |
 | `gameVersion` | none | Version checked against each mod's `gameVersion` rule |
+| `structure` | none | `ModStructure` used for validation, templates and organizing |
+| `validateStructure` | `true` | Validate mods against `structure` on every scan |
+| `gameLayout` | none | Your game's folder layout, enables mapping for mods made for other engines |
+| `detectLayouts` | `true` | Detect each mod's layout from its files |
+| `layoutMappings` | none | Custom mappings per mod layout, replacing the built-in ones |
 | `skipDependencyErrors` | `true` | Skip only the mods with missing dependencies |
 | `maxLogEntries` | `256` | Size limit of the error log, `0` for unlimited |
 

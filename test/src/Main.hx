@@ -14,6 +14,11 @@ import polymod.extended.archive.ArchiveFormats;
 import polymod.extended.archive.ZipArchive;
 import polymod.extended.fs.ArchiveFileSystem;
 import polymod.extended.desktop.DesktopMods;
+import polymod.extended.desktop.ModOrganizer;
+import polymod.extended.structure.FolderLayouts;
+import polymod.extended.structure.FolderMapper;
+import polymod.extended.structure.ModStructure;
+import polymod.extended.structure.StructurePresets;
 import polymod.extended.util.Platform;
 import polymod.extended.util.Signal;
 
@@ -44,6 +49,8 @@ class Main
 		testPolymodExtended();
 		section("DesktopMods");
 		testDesktopMods();
+		section("Folder organization");
+		testOrganization();
 
 		Sys.println('\nPassed: $passed, Failed: $failed');
 		Sys.exit(failed > 0 ? 1 : 0);
@@ -368,6 +375,148 @@ class Main
 		check("watcher ignores the saved mod list", !DesktopMods.update(1.0));
 		DesktopMods.stopWatching();
 		check("stops watching", DesktopMods.watcher == null && !DesktopMods.update(5));
+	}
+
+	static function testOrganization():Void
+	{
+		var root = '$OUT/org_mods';
+
+		mod('$root/plain_mod', "plain_mod");
+		write('$root/plain_mod/data/info.json', '{"name": "plain"}');
+		mod('$root/skin_mod', "skin_mod", '"category": "Skins"');
+		write('$root/songs/_category.json', '{"title": "Song Packs", "description": "Extra songs", "order": 1}');
+		mod('$root/songs/song_pack', "song_pack");
+		write('$root/songs/song_pack/data/info.json', '{"name": "song pack"}');
+		mod('$root/songs/duplicate', "plain_mod");
+		sys.io.File.copy("fixtures/memory_mod.zip", '$root/songs/zip_in_cat.zip');
+		write('$root/empty_cat/_category.json', '{"title": "Empty"}');
+
+		mod('$root/psych_mod', "psych_mod");
+		write('$root/psych_mod/pack.json', '{}');
+		write('$root/psych_mod/characters/bf.json', '{"name": "psych bf"}');
+		write('$root/psych_mod/weeks/week1.json', '{"name": "week 1"}');
+		write('$root/psych_mod/songs/tutorial/Inst.ogg', "psych inst");
+
+		mod('$root/codename_mod', "codename_mod");
+		write('$root/codename_mod/data/weeks/weeks/week1.xml', "<week/>");
+		write('$root/codename_mod/songs/bopeebo/song/Inst.ogg', "codename inst");
+
+		mod('$root/mapped_mod', "mapped_mod", '"layout": "vslice", "folders": {"art": "images", "art/ui": "images/menus"}');
+		write('$root/mapped_mod/art/logo.png', "logo");
+		write('$root/mapped_mod/art/ui/button.png', "button");
+
+		mod('$root/messy_mod', "messy_mod", '"layout": "vslice"');
+		for (file in ["bf.png", "bf.xml", "Inst.ogg", "script.hxc", "notes.json", "README.md", "stuff/menu.png", "images/oops.ogg", "assets/sounds/hit.ogg"])
+			write('$root/messy_mod/$file', file);
+
+		var loaded = PolymodExtended.init({
+			modRoot: root,
+			framework: Framework.CUSTOM,
+			customBackend: TestBackend,
+			modListFile: '$root/modlist.json',
+			structure: StructurePresets.vslice(),
+			gameLayout: "vslice"
+		});
+		var fs = PolymodExtended.fileSystem;
+
+		check("finds mods inside category folders", PolymodExtended.getMod("song_pack") != null && PolymodExtended.isModLoaded("song_pack"));
+		check("finds archives inside category folders", PolymodExtended.isModLoaded("memory_mod")
+			&& fs.getFileContent('$root/songs/zip_in_cat/data/info.json').indexOf("memory") != -1);
+		check("reads category metadata", PolymodExtended.getCategory("songs") != null && PolymodExtended.getCategory("songs").title == "Song Packs");
+		check("lists mods per category", PolymodExtended.getModsInCategory("songs").map(mod -> mod.id).join(",") == "memory_mod,song_pack");
+		check("keeps empty categories with metadata", PolymodExtended.getCategory("empty_cat") != null);
+		check("supports declared categories", PolymodExtended.getModCategory("skin_mod") != null && !PolymodExtended.getModCategory("skin_mod").folder);
+		check("lists uncategorized mods", PolymodExtended.getUncategorizedMods().filter(mod -> mod.id == "plain_mod").length == 1);
+		check("orders categories", PolymodExtended.categories[0].id == "empty_cat" || PolymodExtended.categories[0].order <= PolymodExtended.categories[1].order);
+		check("ignores duplicate mod ids", hasLogged(PolymodExtended.MOD_DUPLICATE_ID) && PolymodExtended.getMod("plain_mod").dirName == "plain_mod");
+
+		section("Folder layouts");
+		check("detects Psych mods", PolymodExtended.getModLayout("psych_mod") == "psych");
+		check("detects Codename mods", PolymodExtended.getModLayout("codename_mod") == "codename");
+		check("maps Psych characters to the game layout", fs.getFileContent('$root/psych_mod/data/characters/bf.json').indexOf("psych bf") != -1);
+		check("maps Psych weeks to levels", fs.exists('$root/psych_mod/data/levels/week1.json'));
+		check("lists mapped folders", fs.readDirectory('$root/psych_mod/data').contains("characters") && fs.isDirectory('$root/psych_mod/data/levels'));
+		check("keeps original paths readable", fs.exists('$root/psych_mod/characters/bf.json'));
+		check("maps wildcard song folders", fs.getFileContent('$root/codename_mod/songs/bopeebo/Inst.ogg') == "codename inst");
+		check("lists wildcard folders", fs.readDirectory('$root/codename_mod/songs/bopeebo').contains("Inst.ogg"));
+		check("applies custom folder mappings", fs.getFileContent('$root/mapped_mod/images/logo.png') == "logo"
+			&& fs.getFileContent('$root/mapped_mod/images/menus/button.png') == "button");
+		check("includes mapped files in recursive listings", fs.readDirectoryRecursive('$root/mapped_mod').contains("images/menus/button.png"));
+		check("exposes the active mappings", PolymodExtended.getFolderMappings("psych_mod").length == 3);
+		check("builds layout mappings", FolderLayouts.mappings("psych", "codename").filter(m -> m.from == "songs/*" && m.to == "songs/*/song").length == 1);
+
+		var mapper = new FolderMapper();
+		check("rejects unbalanced wildcards", mapper.set("mods/x", [{from: "songs/*", to: "music"}]).length == 1 && !mapper.hasMappings());
+
+		section("Structure validation");
+		var issues = PolymodExtended.getStructureIssues("messy_mod");
+		var suggestions:Map<String, String> = [for (issue in issues) if (issue.suggestion != null) issue.path => issue.suggestion];
+		check("flags loose files", suggestions.get("bf.png") == "images/bf.png" && suggestions.get("script.hxc") == "scripts/script.hxc");
+		check("keeps atlas files next to their image", suggestions.get("bf.xml") == "images/bf.xml");
+		check("sends loose data files to data", suggestions.get("notes.json") == "data/notes.json");
+		check("recognizes song audio", suggestions.get("Inst.ogg") == "songs/Inst.ogg");
+		check("flags wrong extensions", suggestions.get("images/oops.ogg") == "sounds/oops.ogg");
+		check("flags unknown folders", suggestions.get("stuff/menu.png") == "images/menu.png");
+		check("unwraps assets folders", suggestions.get("assets/sounds/hit.ogg") == "sounds/hit.ogg");
+		check("allows readme files", !suggestions.exists("README.md") && issues.filter(issue -> issue.path == "README.md").length == 0);
+		check("logs structure warnings", hasLogged(PolymodExtended.MOD_STRUCTURE));
+		check("validates clean mods", PolymodExtended.getStructureIssues("plain_mod").length == 0);
+
+		var custom = ModStructure.fromJson('{"name": "strict", "folders": [{"path": "data", "extensions": ["json"], "required": true}, "images"]}');
+		var customIssues = custom.validate(["images/a.png", "data/b.txt"]);
+		check("loads structures from JSON", customIssues.filter(issue -> issue.kind == WRONG_EXTENSION).length == 1);
+		check("reports missing required folders", custom.validate(["images/a.png"]).filter(issue -> issue.kind == MISSING_FOLDER).length == 1);
+		check("has engine presets", StructurePresets.get("psych").hasFolder("custom_notetypes") && StructurePresets.get("codename") != null);
+
+		section("Auto-organize");
+		var plan = ModOrganizer.planMod("messy_mod");
+		check("plans moves without touching files", plan.moves.length == 8 && sys.FileSystem.exists('$root/messy_mod/bf.png'));
+		check("refuses archive mods", ModOrganizer.planMod("memory_mod").error != null);
+
+		var organized = ModOrganizer.organizeMod("messy_mod");
+		check("moves files into the right folders", organized.success && organized.moved.length == 8
+			&& sys.FileSystem.exists('$root/messy_mod/images/bf.xml') && sys.FileSystem.exists('$root/messy_mod/sounds/hit.ogg'));
+		check("removes emptied folders", !sys.FileSystem.exists('$root/messy_mod/stuff') && !sys.FileSystem.exists('$root/messy_mod/assets'));
+		check("organized mods validate cleanly", PolymodExtended.getStructureIssues("messy_mod").length == 0);
+
+		write('$root/messy_mod/extra.png', "a");
+		write('$root/messy_mod/images/extra.png', "b");
+		var conflict = ModOrganizer.planMod("messy_mod");
+		check("never overwrites files", conflict.moves.length == 0 && conflict.skipped.length == 1);
+
+		section("Category management");
+		check("creates categories", DesktopMods.createCategory("maps", "Maps").success && PolymodExtended.getCategory("maps").title == "Maps");
+		var created = DesktopMods.createMod("map_mod", {category: "maps"});
+		check("creates mods inside categories", created.success && PolymodExtended.getModCategory("map_mod").id == "maps");
+		check("uses the structure for new mods", sys.FileSystem.exists('$root/maps/map_mod/data') && sys.FileSystem.exists('$root/maps/map_mod/images'));
+
+		var moved = DesktopMods.moveModToCategory("skin_mod", "skins");
+		check("moves folder mods between categories", moved.success && PolymodExtended.getModCategory("skin_mod").id == "skins"
+			&& PolymodExtended.isModLoaded("skin_mod"));
+
+		var movedArchive = DesktopMods.moveModToCategory("memory_mod", null);
+		check("moves archive mods out of categories", movedArchive.success && sys.FileSystem.exists('$root/zip_in_cat.zip')
+			&& PolymodExtended.isModLoaded("memory_mod") && PolymodExtended.getModCategory("memory_mod") == null);
+
+		var installed = DesktopMods.installMod("mods/rar4_mod.rar", {category: "songs"});
+		check("installs into categories", installed.success && PolymodExtended.getModCategory("rar4_mod").id == "songs");
+		check("rejects invalid category names", !DesktopMods.createCategory("../evil").success);
+		check("loaded every compatible mod", loaded.length > 0 && !PolymodExtended.log.hasErrors());
+	}
+
+	static function mod(path:String, id:String, ?extra:String):Void
+	{
+		write('$path/_polymod_meta.json', '{"id": "$id", "title": "$id", "api_version": "0.1.0", "mod_version": "1.0.0"' + (extra != null ? ', $extra' : "") + "}");
+	}
+
+	static function write(path:String, content:String):Void
+	{
+		var directory = haxe.io.Path.directory(path);
+
+		if (directory.length > 0 && !sys.FileSystem.exists(directory))
+			sys.FileSystem.createDirectory(directory);
+
+		sys.io.File.saveContent(path, content);
 	}
 
 	static function hasLogged(code:String):Bool

@@ -23,6 +23,7 @@ typedef InstallResult =
 
 typedef InstallOptions =
 {
+	?category:String,
 	?replace:Bool,
 	?reload:Bool,
 	?enable:Bool
@@ -30,6 +31,7 @@ typedef InstallOptions =
 
 typedef CreateModOptions =
 {
+	?category:String,
 	?title:String,
 	?description:String,
 	?author:String,
@@ -127,16 +129,21 @@ class DesktopMods
 				return fail(removed);
 		}
 
-		var targetName = sys.FileSystem.isDirectory(source) ? info.id : info.id + "." + Path.extension(source).toLowerCase();
-		var target = Path.join([modRoot, targetName]);
+		var folder = categoryFolder(options.category);
 
-		if (sys.FileSystem.exists(target) || sys.FileSystem.exists(Path.join([modRoot, info.id])))
+		if (folder == null)
+			return fail('"${options.category}" is not a valid category name');
+
+		var targetName = sys.FileSystem.isDirectory(source) ? info.id : info.id + "." + Path.extension(source).toLowerCase();
+		var target = Path.join([folder, targetName]);
+
+		if (sys.FileSystem.exists(target) || sys.FileSystem.exists(Path.join([folder, info.id])))
 			return fail('"$targetName" already exists in the mods folder');
 
 		try
 		{
-			if (!sys.FileSystem.exists(modRoot))
-				sys.FileSystem.createDirectory(modRoot);
+			if (!sys.FileSystem.exists(folder))
+				sys.FileSystem.createDirectory(folder);
 
 			if (sys.FileSystem.isDirectory(source))
 				copyFolder(Path.join([source, info.prefix]), target);
@@ -226,7 +233,12 @@ class DesktopMods
 		if (id == null || !~/^[A-Za-z0-9_.-]+$/.match(id))
 			return fail('"$id" is not a valid mod id, use letters, numbers, "_", "-" and "."');
 
-		var target = Path.join([modRoot, id]);
+		var folder = categoryFolder(options.category);
+
+		if (folder == null)
+			return fail('"${options.category}" is not a valid category name');
+
+		var target = Path.join([folder, id]);
 
 		if (sys.FileSystem.exists(target) || PolymodExtended.getMod(id) != null)
 			return fail('A mod named "$id" already exists');
@@ -249,8 +261,8 @@ class DesktopMods
 		{
 			sys.FileSystem.createDirectory(target);
 
-			for (folder in (options.folders != null ? options.folders : ["data", "images", "sounds"]))
-				sys.FileSystem.createDirectory(Path.join([target, folder]));
+			for (child in (options.folders != null ? options.folders : defaultFolders()))
+				sys.FileSystem.createDirectory(Path.join([target, child]));
 
 			sys.io.File.saveContent(Path.join([target, PolymodConfig.modMetadataFile]), Json.stringify(meta, null, "\t"));
 		}
@@ -262,6 +274,77 @@ class DesktopMods
 
 		finishChange(true);
 		return {success: true, id: id, path: target};
+	}
+
+	public static function moveModToCategory(id:String, category:Null<String>, reload:Bool = true):InstallResult
+	{
+		var location = getModLocation(id);
+
+		if (location == null)
+			return fail('Mod "$id" is not installed');
+
+		var folder = categoryFolder(category);
+
+		if (folder == null)
+			return fail('"$category" is not a valid category name');
+
+		var target = Path.join([folder, Path.withoutDirectory(location)]);
+
+		if (Path.normalize(target) == Path.normalize(location))
+			return {success: true, id: id, path: location};
+
+		if (sys.FileSystem.exists(target))
+			return fail('"${Path.withoutDirectory(location)}" already exists in "${category != null ? category : "the mods folder"}"');
+
+		var mod = PolymodExtended.getMod(id);
+		var fileSystem = PolymodExtended.fileSystem;
+
+		if (mod != null && Std.isOfType(fileSystem, ArchiveFileSystem))
+			(cast fileSystem : ArchiveFileSystem).unmount(mod.dirName != null ? mod.dirName : id);
+
+		try
+		{
+			if (!sys.FileSystem.exists(folder))
+				sys.FileSystem.createDirectory(folder);
+
+			sys.FileSystem.rename(location, target);
+		}
+		catch (e:Dynamic)
+		{
+			return fail('Could not move "$id": ${ArchiveMounts.message(e)}');
+		}
+
+		finishChange(reload);
+		return {success: true, id: id, path: target};
+	}
+
+	public static function createCategory(name:String, ?title:String, ?description:String, order:Int = 0):InstallResult
+	{
+		var folder = categoryFolder(name);
+
+		if (folder == null || name == null)
+			return fail('"$name" is not a valid category name');
+
+		var file = Path.join([folder, polymod.extended.ModCategory.metadataFile]);
+
+		try
+		{
+			if (!sys.FileSystem.exists(folder))
+				sys.FileSystem.createDirectory(folder);
+
+			sys.io.File.saveContent(file, Json.stringify({
+				title: title != null ? title : name,
+				description: description != null ? description : "",
+				order: order
+			}, null, "\t"));
+		}
+		catch (e:Dynamic)
+		{
+			return fail('Could not create category "$name": ${ArchiveMounts.message(e)}');
+		}
+
+		finishChange(true);
+		return {success: true, id: name, path: folder};
 	}
 
 	public static function startWatching(interval:Float = 2.0):ModWatcher
@@ -489,6 +572,23 @@ class DesktopMods
 		{
 			return false;
 		}
+	}
+
+	static function categoryFolder(category:Null<String>):Null<String>
+	{
+		if (category == null || category.length == 0)
+			return modRoot;
+
+		if (!~/^[A-Za-z0-9_ .-]+$/.match(category) || category == "." || category == "..")
+			return null;
+
+		return Path.join([modRoot, category]);
+	}
+
+	static function defaultFolders():Array<String>
+	{
+		var structure = PolymodExtended.config.structure;
+		return structure != null ? structure.getTemplateFolders() : ["data", "images", "sounds"];
 	}
 
 	static function fail(message:String):InstallResult
